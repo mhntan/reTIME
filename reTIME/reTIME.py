@@ -7,13 +7,19 @@ import os
 import json
 import re
 import base64
-import streamlit.components.v1 as components  # THÊM THƯ VIỆN NÀY ĐỂ CHẠY MÃ NGẦM
+from PIL import Image  # THÊM THƯ VIỆN NÀY ĐỂ ĐỌC ẢNH LOGO
 
 # ==========================================
 # THIẾT LẬP GIAO DIỆN & TIÊU ĐỀ
 # ==========================================
-# Cài đặt ban đầu (để emoji dự phòng)
-st.set_page_config(layout="wide", page_title="reTIME", page_icon="⏱️")
+# Đọc file ảnh logo.png thành dạng hình ảnh
+try:
+    img_logo = Image.open("logo.png")
+except:
+    img_logo = "⏱️" # Biểu tượng dự phòng nếu không tìm thấy file logo.png
+
+# Gắn Tên và Logo vào thanh Tab trình duyệt
+st.set_page_config(layout="wide", page_title="reTIME", page_icon=img_logo)
 
 def get_base64_of_bin_file(bin_file):
     try:
