@@ -7,11 +7,61 @@ import os
 import json
 import re
 import base64
+import streamlit.components.v1 as components  # THÊM THƯ VIỆN NÀY ĐỂ CHẠY MÃ NGẦM
 
 # ==========================================
 # THIẾT LẬP GIAO DIỆN & TIÊU ĐỀ
 # ==========================================
-st.set_page_config(layout="wide", page_title="Tối Ưu Lịch YHCT", page_icon="logo.png")
+# Cài đặt ban đầu (để emoji dự phòng)
+st.set_page_config(layout="wide", page_title="reTIME", page_icon="⏱️")
+
+def get_base64_of_bin_file(bin_file):
+    try:
+        with open(bin_file, 'rb') as f: return base64.b64encode(f.read()).decode()
+    except: return None
+
+logo_b64 = get_base64_of_bin_file("logo.png")
+
+# --- ĐOẠN CODE "HACK" ÉP TRÌNH DUYỆT ĐỔI TÊN VÀ LOGO KHI CÀI ĐẶT SHORTCUT ---
+if logo_b64:
+    logo_data_url = f"data:image/png;base64,{logo_b64}"
+    js_code = f"""
+    <script>
+    const parentDoc = window.parent.document;
+    
+    // 1. Đổi tên hiển thị trên Tab trình duyệt
+    parentDoc.title = "reTIME";
+
+    // 2. Xóa icon Streamlit cũ và thay logo.png lên Tab trình duyệt
+    parentDoc.querySelectorAll('link[rel="shortcut icon"], link[rel="icon"], link[rel="apple-touch-icon"]').forEach(el => el.remove());
+    const newIcon = parentDoc.createElement('link'); newIcon.rel = 'icon'; newIcon.href = '{logo_data_url}';
+    parentDoc.head.appendChild(newIcon);
+    const appleIcon = parentDoc.createElement('link'); appleIcon.rel = 'apple-touch-icon'; appleIcon.href = '{logo_data_url}';
+    parentDoc.head.appendChild(appleIcon);
+
+    // 3. Đánh tráo file cấu hình PWA (Để lúc cài đặt Shortcut ra tên reTIME và Logo của app)
+    parentDoc.querySelectorAll('link[rel="manifest"]').forEach(el => el.remove());
+    const manifest = {{
+        "name": "reTIME",
+        "short_name": "reTIME",
+        "start_url": window.parent.location.href,
+        "display": "standalone",
+        "background_color": "#ffffff",
+        "theme_color": "#5DADE2",
+        "icons": [
+            {{"src": "{logo_data_url}", "sizes": "192x192", "type": "image/png"}},
+            {{"src": "{logo_data_url}", "sizes": "512x512", "type": "image/png"}}
+        ]
+    }};
+    const manifestBlob = new Blob([JSON.stringify(manifest)], {{type: 'application/json'}});
+    const newManifest = parentDoc.createElement('link');
+    newManifest.rel = 'manifest'; newManifest.href = URL.createObjectURL(manifestBlob);
+    parentDoc.head.appendChild(newManifest);
+    </script>
+    """
+    # Chạy đoạn mã JS ngầm, không hiển thị ra màn hình
+    components.html(js_code, height=0, width=0)
+# ----------------------------------------------------------------------------
 
 st.markdown("""
     <style>
@@ -31,6 +81,10 @@ st.markdown("""
     </div>
     <hr style='margin-top: 15px; margin-bottom: 25px;'>
 """, unsafe_allow_html=True)
+
+# ==========================================
+# HÀM XỬ LÝ LƯU TRỮ VÀ DỌN DẸP TỰ ĐỘNG (AUTO-CLEANUP 7 NGÀY)
+# ...
 
 # ==========================================
 # HÀM XỬ LÝ LƯU TRỮ VÀ DỌN DẸP TỰ ĐỘNG (AUTO-CLEANUP 7 NGÀY)
