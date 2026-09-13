@@ -1,0 +1,58 @@
+[
+  {
+    "Ma_BN": "BN02",
+    "Ten_BN": "2",
+    "BS_Kham": "bs-Quyen",
+    "Y_Lenh": "ĐIỆN XUNG, TỪ TRƯỜNG, XOA BÓP MÁY, KÉO DÃN, SIÊU ÂM ĐIỀU TRỊ, LASER CST, XUNG KÍCH, XOA BÓP VÙNG, XOA BÓP TOÀN THÂN, ĐIỆN CHÂM, THUỶ CHÂM"
+  },
+  {
+    "Ma_BN": "BN03",
+    "Ten_BN": "3",
+    "BS_Kham": "bs-Hong",
+    "Y_Lenh": "ĐIỆN XUNG, TỪ TRƯỜNG, XOA BÓP MÁY, KÉO DÃN, SIÊU ÂM ĐIỀU TRỊ, LASER CST, XUNG KÍCH, XOA BÓP VÙNG, XOA BÓP TOÀN THÂN, ĐIỆN CHÂM, THUỶ CHÂM"
+  },
+  {
+    "Ma_BN": "BN04",
+    "Ten_BN": "4",
+    "BS_Kham": "bs-Hong",
+    "Y_Lenh": "ĐIỆN XUNG, TỪ TRƯỜNG, XOA BÓP MÁY, KÉO DÃN, SIÊU ÂM ĐIỀU TRỊ, LASER CST, XUNG KÍCH, XOA BÓP VÙNG, XOA BÓP TOÀN THÂN, ĐIỆN CHÂM, THUỶ CHÂM"
+  },
+  {
+    "Ma_BN": "BN05",
+    "Ten_BN": "5",
+    "BS_Kham": "bs-Trung",
+    "Y_Lenh": "ĐIỆN XUNG, TỪ TRƯỜNG, XOA BÓP MÁY, KÉO DÃN, SIÊU ÂM ĐIỀU TRỊ, LASER CST, XUNG KÍCH, XOA BÓP VÙNG, XOA BÓP TOÀN THÂN, ĐIỆN CHÂM, THUỶ CHÂM"
+  },
+  {
+    "Ma_BN": "BN06",
+    "Ten_BN": "6",
+    "BS_Kham": "bs-Trung",
+    "Y_Lenh": "ĐIỆN XUNG, TỪ TRƯỜNG, XOA BÓP MÁY, KÉO DÃN, SIÊU ÂM ĐIỀU TRỊ, LASER CST, XUNG KÍCH, XOA BÓP VÙNG, XOA BÓP TOÀN THÂN, ĐIỆN CHÂM, THUỶ CHÂM"
+  },
+  {
+    "Ma_BN": "BN07",
+    "Ten_BN": "MỚI",
+    "BS_Kham": "bs-Vy",
+    "Y_Lenh": "ĐIỆN XUNG, TỪ TRƯỜNG, XOA BÓP MÁY, KÉO DÃN, SIÊU ÂM ĐIỀU TRỊ, LASER CST, XUNG KÍCH, XOA BÓP VÙNG, XOA BÓP TOÀN THÂN, ĐIỆN CHÂM, THUỶ CHÂM"
+  },
+  {
+    "Ma_BN": "BN08",
+    "Ten_BN": "new",
+    "BS_Kham": "bs-Vy",
+    "Y_Lenh": "ĐIỆN XUNG, TỪ TRƯỜNG, XOA BÓP MÁY, KÉO DÃN, SIÊU ÂM ĐIỀU TRỊ, LASER CST, XUNG KÍCH, XOA BÓP VÙNG, XOA BÓP TOÀN THÂN, ĐIỆN CHÂM, THUỶ CHÂM"
+  },
+  {
+    "Ma_BN": "BN1209-01",
+    "Ten_BN": "mới 2",
+    "BS_Kham": "bs-Nha",
+    "Y_Lenh": "ĐIỆN XUNG, TỪ TRƯỜNG, XOA BÓP MÁY, KÉO DÃN, SIÊU ÂM ĐIỀU TRỊ, LASER CST, XUNG KÍCH, XOA BÓP VÙNG, XOA BÓP TOÀN THÂN, ĐIỆN CHÂM, THUỶ CHÂM",
+    "Created_At": 1789222193.184349
+  },
+  {
+    "Ma_BN": "BN1209-02",
+    "Ten_BN": "mới thêm vào",
+    "BS_Kham": "bs-Quyen",
+    "Y_Lenh": "ĐIỆN XUNG, TỪ TRƯỜNG, XOA BÓP MÁY, KÉO DÃN, SIÊU ÂM ĐIỀU TRỊ, LASER CST, XUNG KÍCH, XOA BÓP VÙNG, XOA BÓP TOÀN THÂN, ĐIỆN CHÂM, THUỶ CHÂM",
+    "Created_At": 1789223610.150841
+  }
+]
