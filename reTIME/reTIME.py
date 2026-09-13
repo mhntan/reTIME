@@ -28,45 +28,6 @@ def get_base64_of_bin_file(bin_file):
 
 logo_b64 = get_base64_of_bin_file("logo.png")
 
-# --- ĐOẠN CODE "HACK" ÉP TRÌNH DUYỆT ĐỔI TÊN VÀ LOGO KHI CÀI ĐẶT SHORTCUT ---
-if logo_b64:
-    logo_data_url = f"data:image/png;base64,{logo_b64}"
-    js_code = f"""
-    <script>
-    const parentDoc = window.parent.document;
-    
-    // 1. Đổi tên hiển thị trên Tab trình duyệt
-    parentDoc.title = "reTIME";
-
-    // 2. Xóa icon Streamlit cũ và thay logo.png lên Tab trình duyệt
-    parentDoc.querySelectorAll('link[rel="shortcut icon"], link[rel="icon"], link[rel="apple-touch-icon"]').forEach(el => el.remove());
-    const newIcon = parentDoc.createElement('link'); newIcon.rel = 'icon'; newIcon.href = '{logo_data_url}';
-    parentDoc.head.appendChild(newIcon);
-    const appleIcon = parentDoc.createElement('link'); appleIcon.rel = 'apple-touch-icon'; appleIcon.href = '{logo_data_url}';
-    parentDoc.head.appendChild(appleIcon);
-
-    // 3. Đánh tráo file cấu hình PWA (Để lúc cài đặt Shortcut ra tên reTIME và Logo của app)
-    parentDoc.querySelectorAll('link[rel="manifest"]').forEach(el => el.remove());
-    const manifest = {{
-        "name": "reTIME",
-        "short_name": "reTIME",
-        "start_url": window.parent.location.href,
-        "display": "standalone",
-        "background_color": "#ffffff",
-        "theme_color": "#5DADE2",
-        "icons": [
-            {{"src": "{logo_data_url}", "sizes": "192x192", "type": "image/png"}},
-            {{"src": "{logo_data_url}", "sizes": "512x512", "type": "image/png"}}
-        ]
-    }};
-    const manifestBlob = new Blob([JSON.stringify(manifest)], {{type: 'application/json'}});
-    const newManifest = parentDoc.createElement('link');
-    newManifest.rel = 'manifest'; newManifest.href = URL.createObjectURL(manifestBlob);
-    parentDoc.head.appendChild(newManifest);
-    </script>
-    """
-    # Chạy đoạn mã JS ngầm, không hiển thị ra màn hình
-    components.html(js_code, height=0, width=0)
 # ----------------------------------------------------------------------------
 
 st.markdown("""
@@ -155,10 +116,16 @@ def load_bn_data_db():
     return []
 
 def save_bn_data_db(bn_list):
-    if USE_GSHEETS: conn.update(worksheet="BenhNhan", data=pd.DataFrame(bn_list))
+    if USE_GSHEETS:
+        df = pd.DataFrame(bn_list)
+        # Khắc phục lỗi khi danh sách bệnh nhân trống
+        if df.empty:
+            df = pd.DataFrame(columns=["Ma_BN", "Ten_BN", "BS_Kham", "Y_Lenh", "Created_At"])
+        conn.update(worksheet="BenhNhan", data=df)
     else:
-        with open('autosave_bn_list.json', 'w', encoding='utf-8') as f: json.dump(bn_list, f, ensure_ascii=False, indent=2)
-
+        with open('autosave_bn_list.json', 'w', encoding='utf-8') as f: 
+            json.dump(bn_list, f, ensure_ascii=False, indent=2)
+            
 @st.cache_data
 def load_base_data(file_name):
     # Tự động lấy đường dẫn tuyệt đối của thư mục chứa file code
