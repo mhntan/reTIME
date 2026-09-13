@@ -100,10 +100,17 @@ def save_bn_data_db(bn_list):
         with open('autosave_bn_list.json', 'w', encoding='utf-8') as f: json.dump(bn_list, f, ensure_ascii=False, indent=2)
 
 @st.cache_data
-def load_base_data(file_path): return pd.read_excel(file_path, sheet_name='Thong_So_Co_Dinh')
+def load_base_data(file_name):
+    # Tự động lấy đường dẫn tuyệt đối của thư mục chứa file code
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(current_dir, file_name)
+    return pd.read_excel(file_path, sheet_name='Thong_So_Co_Dinh')
 
-try: df_thongso = load_base_data('data.xlsx')
-except Exception: st.error("⚠️ Không tìm thấy file 'data.xlsx'. Vui lòng kiểm tra lại!"); st.stop()
+try: 
+    df_thongso = load_base_data('data.xlsx')
+except Exception as e:
+    st.error(f"⚠️ Không tìm thấy file 'data.xlsx'. Lỗi hệ thống: {e}")
+    st.stop()
 
 # ==========================================
 # THANH CÔNG CỤ CHỌN NGÀY & LÀM MỚI 
