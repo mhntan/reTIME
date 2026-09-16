@@ -6,36 +6,60 @@ import io
 import os
 import json
 import re
-import base64
-from PIL import Image  # THÊM THƯ VIỆN NÀY ĐỂ ĐỌC ẢNH LOGO
+import streamlit.components.v1 as components
 
 # ==========================================
 # THIẾT LẬP GIAO DIỆN & TIÊU ĐỀ
 # ==========================================
-# Đọc file ảnh logo.png thành dạng hình ảnh
-try:
-    img_logo = Image.open("logo.png")
-except:
-    img_logo = "⏱️" # Biểu tượng dự phòng nếu không tìm thấy file logo.png
+st.set_page_config(layout="wide", page_title="reTIME", page_icon="⏱️")
 
-# Gắn Tên và Logo vào thanh Tab trình duyệt
-st.set_page_config(layout="wide", page_title="reTIME", page_icon=img_logo)
+# CHÈN MÃ JAVASCRIPT: CHẶN ENTER NỘP FORM & CHUYỂN Ô KẾ TIẾP
+components.html("""
+<script>
+if (!window.parent.document.getElementById('enter-to-tab-script')) {
+    const script = window.parent.document.createElement('script');
+    script.id = 'enter-to-tab-script';
+    script.innerHTML = `
+        // Tham số 'true' cuối cùng giúp chặn sự kiện trước khi Streamlit kịp nhận diện
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                const active = document.activeElement;
+                
+                // 1. Nếu đang chọn nút Lập Hồ Sơ (hoặc button bất kỳ), cho phép Enter nộp form
+                if (active && active.tagName === 'BUTTON') return;
+                
+                // 2. Nếu đang ở ô nhập Text (Tên BN, Giờ ra viện), CHẶN form nộp và nhảy ô
+                if (active && active.tagName === 'INPUT' && active.getAttribute('role') !== 'combobox') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    // Gom toàn bộ input, hộp thoại chọn và button đang hiển thị
+                    const elements = Array.from(document.querySelectorAll('input:not([disabled]), div[data-baseweb="select"] input, button:not([disabled])'));
+                    const index = elements.indexOf(active);
+                    
+                    // Chuyển Focus sang phần tử tiếp theo
+                    if (index > -1 && index < elements.length - 1) {
+                        elements[index + 1].focus();
+                    }
+                }
+            }
+        }, true);
+    `;
+    window.parent.document.head.appendChild(script);
+}
+</script>
+""", height=0, width=0)
 
-def get_base64_of_bin_file(bin_file):
-    try:
-        with open(bin_file, 'rb') as f: return base64.b64encode(f.read()).decode()
-    except: return None
-
-logo_b64 = get_base64_of_bin_file("logo.png")
-
-# ----------------------------------------------------------------------------
-
+# CSS: TÙY CHỈNH MÀU NÚT BẤM
 st.markdown("""
     <style>
-    button[kind="primary"] { background-color: #5DADE2 !important; border-color: #5DADE2 !important; color: white !important; }
-    button[kind="primary"]:hover { background-color: #3498DB !important; border-color: #3498DB !important; }
-    button[kind="secondary"] { background-color: #D6EAF8 !important; border-color: #AED6F1 !important; color: #21618C !important; font-weight: bold;}
-    button[kind="secondary"]:hover { background-color: #AED6F1 !important; border-color: #85C1E9 !important; }
+    /* Nút chính (Lập hồ sơ, Tiến hành xếp lịch) -> Đổi sang MÀU XANH LÁ (Green) */
+    button[kind="primary"] { background-color: #27AE60 !important; border-color: #27AE60 !important; color: white !important; font-weight: bold; }
+    button[kind="primary"]:hover { background-color: #1E8449 !important; border-color: #1E8449 !important; }
+    
+    /* Nút phụ (Xóa, Ra viện, Làm mới) -> Giữ MÀU CAM dịu mắt */
+    button[kind="secondary"] { background-color: #F39C12 !important; border-color: #F39C12 !important; color: white !important; font-weight: bold;}
+    button[kind="secondary"]:hover { background-color: #E67E22 !important; border-color: #E67E22 !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -50,28 +74,16 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# HÀM XỬ LÝ LƯU TRỮ VÀ DỌN DẸP TỰ ĐỘNG (AUTO-CLEANUP 7 NGÀY)
-# ...
-
-# ==========================================
-# HÀM XỬ LÝ LƯU TRỮ VÀ DỌN DẸP TỰ ĐỘNG (AUTO-CLEANUP 7 NGÀY)
+# HÀM XỬ LÝ LƯU TRỮ VÀ DỌN DẸP TỰ ĐỘNG
 # ==========================================
 def cleanup_old_files():
-    # Tính mốc thời gian 7 ngày trước
     limit_date = datetime.today().date() - timedelta(days=7)
     try:
         for f in os.listdir():
-            # Chỉ tìm và xóa các file lịch sử lưu theo ngày
             if f.startswith(('ns_', 'bn_', 'sched_')) and (f.endswith('.csv') or f.endswith('.json')):
-                # Lấy chuỗi ngày tháng từ tên file (Ví dụ từ ns_2026-09-13.csv -> 2026-09-13)
                 date_str = f.split('_')[1].split('.')[0]
-                file_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                if file_date < limit_date:
-                    os.remove(f) # Xóa file nếu cũ hơn 7 ngày
-    except Exception:
-        pass
-
-# Chạy trình dọn rác ngầm mỗi khi khởi động
+                if datetime.strptime(date_str, "%Y-%m-%d").date() < limit_date: os.remove(f)
+    except Exception: pass
 cleanup_old_files()
 
 def get_fallback_file(prefix, ext, target_date):
@@ -81,15 +93,18 @@ def get_fallback_file(prefix, ext, target_date):
         if os.path.exists(test_path): return test_path
     return None
 
-# KẾT NỐI GOOGLE SHEETS & DATABASE
+def sanitize_bn_list(bn_list):
+    for bn in bn_list:
+        if 'Gio_Ra_Vien' not in bn: bn['Gio_Ra_Vien'] = ""
+    return bn_list
+
+# KẾT NỐI GOOGLE SHEETS
 USE_GSHEETS = False
 try:
     from streamlit_gsheets import GSheetsConnection
     conn = st.connection("gsheets", type=GSheetsConnection)
     USE_GSHEETS = True
-except Exception as e:
-    USE_GSHEETS = False
-    st.error(f"⚠️ Lỗi kết nối Google Sheets: {e}")
+except Exception: USE_GSHEETS = False
 
 def load_ns_data_db():
     if USE_GSHEETS:
@@ -100,7 +115,7 @@ def load_ns_data_db():
         'Di_Lam': [True]*11, 
         'Ma_Nhan_Vien': ['bs-Quyen', 'bs-Hong', 'bs-Trung', 'bs-Thu', 'bs-Vy', 'bs-Thanh', 'bs-Nha', 'ktv-Huu', 'ktv-Duyen', 'ktv-LuanPhien1', 'ktv-LuanPhien2'],
         'Ten_Nhan_Vien': ['Bs. Chung Tú Quyên', 'Bs. Đậu Thị Hồng', 'Bs. Hoàng Thế Trung', 'Bs. Huỳnh Anh Thư', 'Bs. Lê Uyên Phương Vy', 'Bs. Phạm Quốc Thanh', 'Bs. Cao Pha Nha', 'KTV. Phan Phúc Hữu', 'KTV. Nguyễn Mỹ Duyên', 'KTV Luân Phiên 1', 'KTV Luân Phiên 2'],
-        'Ca_Lam_Viec': ['Cả ngày']*11, 'Ghi_Chu': ['']*11
+        'Ca_Lam_Viec': ['Cả ngày']*11, 'Gio_Bat_Dau': ['07:10']*11, 'Ghi_Chu': ['']*11
     })
 
 def save_ns_data_db(df):
@@ -109,35 +124,35 @@ def save_ns_data_db(df):
 
 def load_bn_data_db():
     if USE_GSHEETS:
-        try: return conn.read(worksheet="BenhNhan", ttl=0).to_dict('records')
+        try: return sanitize_bn_list(conn.read(worksheet="BenhNhan", ttl=0).to_dict('records'))
         except: pass
     if os.path.exists('autosave_bn_list.json'):
-        with open('autosave_bn_list.json', 'r', encoding='utf-8') as f: return json.load(f)
+        with open('autosave_bn_list.json', 'r', encoding='utf-8') as f: return sanitize_bn_list(json.load(f))
     return []
 
 def save_bn_data_db(bn_list):
     if USE_GSHEETS:
         df = pd.DataFrame(bn_list)
-        # Khắc phục lỗi khi danh sách bệnh nhân trống
-        if df.empty:
-            df = pd.DataFrame(columns=["Ma_BN", "Ten_BN", "BS_Kham", "Y_Lenh", "Created_At"])
+        if df.empty: df = pd.DataFrame(columns=["Ma_BN", "Ten_BN", "BS_Kham", "Y_Lenh", "Created_At", "Gio_Ra_Vien"])
         conn.update(worksheet="BenhNhan", data=df)
     else:
-        with open('autosave_bn_list.json', 'w', encoding='utf-8') as f: 
-            json.dump(bn_list, f, ensure_ascii=False, indent=2)
-            
+        with open('autosave_bn_list.json', 'w', encoding='utf-8') as f: json.dump(bn_list, f, ensure_ascii=False, indent=2)
+
+def parse_time_input(time_str):
+    if pd.isna(time_str): return ""
+    time_str = str(time_str).strip().replace(';', ':')
+    if not time_str: return ""
+    if re.match(r'^\d{4}$', time_str): time_str = f"{time_str[:2]}:{time_str[2:]}"
+    elif re.match(r'^\d{3}$', time_str): time_str = f"0{time_str[0]}:{time_str[1:]}"
+    try: datetime.strptime(time_str, "%H:%M"); return time_str
+    except: return time_str
+
 @st.cache_data
 def load_base_data(file_name):
-    # Tự động lấy đường dẫn tuyệt đối của thư mục chứa file code
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(current_dir, file_name)
-    return pd.read_excel(file_path, sheet_name='Thong_So_Co_Dinh')
+    return pd.read_excel(file_name, sheet_name='Thong_So_Co_Dinh')
 
-try: 
-    df_thongso = load_base_data('data.xlsx')
-except Exception as e:
-    st.error(f"⚠️ Không tìm thấy file 'data.xlsx'. Lỗi hệ thống: {e}")
-    st.stop()
+try: df_thongso = load_base_data('data.xlsx')
+except Exception as e: st.error(f"⚠️ Không tìm thấy file 'data.xlsx'. Lỗi: {e}"); st.stop()
 
 # ==========================================
 # THANH CÔNG CỤ CHỌN NGÀY & LÀM MỚI 
@@ -166,22 +181,20 @@ if 'selected_date' not in st.session_state or st.session_state.selected_date != 
     else:
         fb_ns = get_fallback_file('ns', 'csv', selected_date)
         if fb_ns: st.session_state.ns_data = pd.read_csv(fb_ns)
-        else:
-            raw_ns = load_ns_data_db()
-            if 'Ban_Tu' in raw_ns.columns: raw_ns = raw_ns.drop(columns=['Ban_Tu', 'Ban_Den']) # Dọn dẹp cột cũ nếu còn
-            st.session_state.ns_data = raw_ns
+        else: st.session_state.ns_data = load_ns_data_db()
             
     st.session_state.ns_data['Di_Lam'] = st.session_state.ns_data['Di_Lam'].astype(bool)
-    for col in ['Ghi_Chu', 'Ten_Nhan_Vien', 'Ca_Lam_Viec']:
+    if 'Gio_Bat_Dau' not in st.session_state.ns_data.columns: st.session_state.ns_data['Gio_Bat_Dau'] = '07:10'
+    for col in ['Gio_Bat_Dau', 'Ghi_Chu', 'Ten_Nhan_Vien', 'Ca_Lam_Viec']:
         if col in st.session_state.ns_data.columns:
             st.session_state.ns_data[col] = st.session_state.ns_data[col].fillna("").astype(str).replace("nan", "")
 
     if os.path.exists(f"bn_{date_str}.json"):
-        with open(f"bn_{date_str}.json", 'r', encoding='utf-8') as f: st.session_state.bn_list = json.load(f)
+        with open(f"bn_{date_str}.json", 'r', encoding='utf-8') as f: st.session_state.bn_list = sanitize_bn_list(json.load(f))
     else:
         fb_bn = get_fallback_file('bn', 'json', selected_date)
         if fb_bn: 
-            with open(fb_bn, 'r', encoding='utf-8') as f: st.session_state.bn_list = json.load(f)
+            with open(fb_bn, 'r', encoding='utf-8') as f: st.session_state.bn_list = sanitize_bn_list(json.load(f))
         else: st.session_state.bn_list = load_bn_data_db()
         
     if os.path.exists(f"sched_{date_str}.json"):
@@ -194,7 +207,7 @@ if 'selected_date' not in st.session_state or st.session_state.selected_date != 
     st.rerun()
 
 # ==========================================
-# KHU VỰC 1: QUẢN LÝ NHÂN SỰ (KHÔNG CÒN VẮNG MẶT -> HẾT CHỚP MÀN HÌNH)
+# KHU VỰC 1: QUẢN LÝ NHÂN SỰ
 # ==========================================
 st.markdown("<h3 style='color: #5DADE2; border-bottom: 2px solid #5DADE2; padding-bottom: 5px;'>1. CẬP NHẬT NHÂN SỰ LÀM VIỆC</h3>", unsafe_allow_html=True)
 
@@ -209,7 +222,7 @@ with st.expander("⚙️ Quản lý Nhân sự (Thêm mới / Xóa)"):
             if new_ten.strip():
                 prefix = "bs" if new_role == "Bác sĩ" else "ktv"
                 new_ma = f"{prefix}-{new_ten.split()[-1]}{len(st.session_state.ns_data)}"
-                new_row = pd.DataFrame([{'Di_Lam': True, 'Ma_Nhan_Vien': new_ma, 'Ten_Nhan_Vien': new_ten, 'Ca_Lam_Viec': 'Cả ngày', 'Ghi_Chu': ''}])
+                new_row = pd.DataFrame([{'Di_Lam': True, 'Ma_Nhan_Vien': new_ma, 'Ten_Nhan_Vien': new_ten, 'Ca_Lam_Viec': 'Cả ngày', 'Gio_Bat_Dau': '07:10', 'Ghi_Chu': ''}])
                 st.session_state.ns_data = pd.concat([st.session_state.ns_data, new_row], ignore_index=True)
                 save_ns_data_db(st.session_state.ns_data)
                 st.rerun()
@@ -232,15 +245,24 @@ edited_ns = st.data_editor(
         "Di_Lam": st.column_config.CheckboxColumn("Đi làm?", default=True),
         "Ma_Nhan_Vien": st.column_config.TextColumn("Mã NV", disabled=True),
         "Ten_Nhan_Vien": st.column_config.TextColumn("Họ và Tên"),
-        "Ca_Lam_Viec": st.column_config.SelectboxColumn("Ca làm việc", options=["Sáng", "Chiều", "Cả ngày"]),
+        "Ca_Lam_Viec": st.column_config.SelectboxColumn("Ca làm", options=["Sáng", "Chiều", "Cả ngày"]),
+        "Gio_Bat_Dau": st.column_config.TextColumn("Giờ bắt đầu (Vd: 07:10)"),
         "Ghi_Chu": "Ghi chú"
     }, hide_index=True, use_container_width=True
 )
 
 if not edited_ns.equals(st.session_state.ns_data):
+    for i in range(len(edited_ns)):
+        val = str(edited_ns.at[i, 'Gio_Bat_Dau']).strip()
+        if val and val not in ['None', 'nan']: 
+            parsed = parse_time_input(val)
+            if parsed != val: 
+                edited_ns.at[i, 'Gio_Bat_Dau'] = parsed
+                
     st.session_state.ns_data = edited_ns.copy()
     save_ns_data_db(st.session_state.ns_data)
-edited_ns.to_csv(f"ns_{date_str}.csv", index=False)
+    edited_ns.to_csv(f"ns_{date_str}.csv", index=False)
+    st.rerun() 
 
 active_staff = edited_ns[edited_ns['Di_Lam'] == True]
 ktv_list = active_staff[active_staff['Ma_Nhan_Vien'].str.startswith('ktv-')]['Ma_Nhan_Vien'].tolist()
@@ -265,9 +287,13 @@ with col_form:
     st.markdown("#### ➕ Thêm Bệnh Nhân Mới")
     with st.container(border=True):
         with st.form("form_nhap_bn", clear_on_submit=True):
-            ten_bn = st.text_input("Tên Bệnh Nhân (Bắt buộc)")
+            col_b1, col_b2 = st.columns([2, 1])
+            with col_b1: ten_bn = st.text_input("Tên Bệnh Nhân (Bắt buộc)")
+            with col_b2: gio_ra_vien = st.text_input("Giờ ra viện (nếu có)")
+            
             bs_kham = st.selectbox("Bác sĩ phụ trách", options=bs_list, format_func=lambda x: ten_nv_dict.get(x, x))
             y_lenh_chon = st.multiselect("Chỉ định Thủ thuật", options=danh_sach_thu_thuat)
+            
             if st.form_submit_button("Lập Hồ Sơ", type="primary", use_container_width=True):
                 if ten_bn.strip() == "": st.error("Vui lòng nhập tên Bệnh nhân!")
                 elif not y_lenh_chon: st.error("Vui lòng chọn ít nhất 1 thủ thuật!")
@@ -277,7 +303,8 @@ with col_form:
                     ma_bn = f"BN{today_prefix}-{count_today+1:02d}"
                     st.session_state.bn_list.append({
                         "Ma_BN": ma_bn, "Ten_BN": ten_bn, "BS_Kham": bs_kham, 
-                        "Y_Lenh": ", ".join(y_lenh_chon), "Created_At": datetime.now().timestamp()
+                        "Y_Lenh": ", ".join(y_lenh_chon), "Created_At": datetime.now().timestamp(),
+                        "Gio_Ra_Vien": parse_time_input(gio_ra_vien)
                     })
                     save_bn_data_db(st.session_state.bn_list)
                     with open(f"bn_{date_str}.json", 'w', encoding='utf-8') as f: json.dump(st.session_state.bn_list, f, ensure_ascii=False)
@@ -290,19 +317,24 @@ with col_table:
         if len(st.session_state.bn_list) > 0:
             df_hienthi = pd.DataFrame(st.session_state.bn_list)
             df_hienthi['BS_Kham'] = df_hienthi['BS_Kham'].map(lambda x: ten_nv_dict.get(x, x))
-            st.dataframe(df_hienthi[['Ma_BN', 'Ten_BN', 'BS_Kham', 'Y_Lenh']], hide_index=True, use_container_width=True, height=200)
+            st.dataframe(df_hienthi[['Ma_BN', 'Ten_BN', 'Gio_Ra_Vien', 'BS_Kham', 'Y_Lenh']].rename(columns={'Gio_Ra_Vien': 'Hẹn về'}), hide_index=True, use_container_width=True, height=200)
             
             with st.expander("✏️ Điều chỉnh Y Lệnh hoặc Cho Ra Viện"):
                 edit_idx = st.selectbox("🔍 Chọn Bệnh nhân:", options=range(len(st.session_state.bn_list)), format_func=lambda i: f"{st.session_state.bn_list[i]['Ma_BN']} - {st.session_state.bn_list[i]['Ten_BN']}")
                 selected_bn = st.session_state.bn_list[edit_idx]
                 current_yl = [t.strip() for t in selected_bn['Y_Lenh'].split(",") if t.strip()]
                 
-                edit_bs = st.selectbox("Đổi BS phụ trách:", options=bs_list, format_func=lambda x: ten_nv_dict.get(x, x), index=bs_list.index(selected_bn['BS_Kham']) if selected_bn['BS_Kham'] in bs_list else 0)
+                col_e1, col_e2 = st.columns(2)
+                with col_e1: edit_bs = st.selectbox("Đổi BS phụ trách:", options=bs_list, format_func=lambda x: ten_nv_dict.get(x, x), index=bs_list.index(selected_bn['BS_Kham']) if selected_bn['BS_Kham'] in bs_list else 0)
+                with col_e2: edit_rv = st.text_input("Giờ ra viện mới:", value=selected_bn.get('Gio_Ra_Vien', ''))
+                
                 edit_yl = st.multiselect("Thêm/Bớt Thủ thuật:", options=danh_sach_thu_thuat, default=current_yl)
+                
                 col_btn1, col_btn2 = st.columns(2)
                 if col_btn1.button("💾 Cập nhật", type="primary", use_container_width=True):
                     st.session_state.bn_list[edit_idx]['BS_Kham'] = edit_bs
                     st.session_state.bn_list[edit_idx]['Y_Lenh'] = ", ".join(edit_yl)
+                    st.session_state.bn_list[edit_idx]['Gio_Ra_Vien'] = parse_time_input(edit_rv)
                     save_bn_data_db(st.session_state.bn_list)
                     with open(f"bn_{date_str}.json", 'w', encoding='utf-8') as f: json.dump(st.session_state.bn_list, f, ensure_ascii=False)
                     st.rerun()
@@ -337,20 +369,37 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH TỐI ƯU HÔM NAY", type="primary"
 
     jobs = []
     ten_bn_dict = {}
+    discharge_dict = {}
+    
     for bn in st.session_state.bn_list:
-        ten_bn_dict[bn['Ma_BN']] = bn['Ten_BN']
+        ma_bn = bn['Ma_BN']
+        ten_bn_dict[ma_bn] = bn['Ten_BN']
+        
+        rv_str = bn.get('Gio_Ra_Vien', '')
+        if rv_str:
+            try: discharge_dict[ma_bn] = datetime.strptime(f"{date_str} {rv_str}", "%Y-%m-%d %H:%M")
+            except: discharge_dict[ma_bn] = datetime.max
+        else:
+            discharge_dict[ma_bn] = datetime.max
+
         for tt in [t.strip() for t in bn['Y_Lenh'].split(",") if t.strip()]:
-            jobs.append({'Ma_BN': bn['Ma_BN'], 'BS_Kham': bn['BS_Kham'], 'Ma_Thu_Thuat': ma_thu_thuat_dict[tt], 'Ten_Thu_Thuat': tt, 'Created_At': bn.get('Created_At', 0)})
+            jobs.append({'Ma_BN': ma_bn, 'BS_Kham': bn['BS_Kham'], 'Ma_Thu_Thuat': ma_thu_thuat_dict[tt], 'Ten_Thu_Thuat': tt, 'Created_At': bn.get('Created_At', 0), 'Discharge_Time': discharge_dict[ma_bn]})
 
     base_time_sang = datetime.strptime(f"{date_str} 07:10:00", "%Y-%m-%d %H:%M:%S")
     base_time_chieu = datetime.strptime(f"{date_str} 13:00:00", "%Y-%m-%d %H:%M:%S")
+    
     staff_ready, staff_shifts = {}, {}
     for _, row in active_staff.iterrows():
         nv, ca = row['Ma_Nhan_Vien'], row['Ca_Lam_Viec']
         staff_shifts[nv] = ca
-        staff_ready[nv] = base_time_chieu if ca == "Chiều" else base_time_sang
+        gbd = parse_time_input(str(row.get('Gio_Bat_Dau', '')))
+        if gbd:
+            try: staff_ready[nv] = datetime.strptime(f"{date_str} {gbd}", "%Y-%m-%d %H:%M")
+            except: staff_ready[nv] = base_time_chieu if ca == "Chiều" else base_time_sang
+        else:
+            staff_ready[nv] = base_time_chieu if ca == "Chiều" else base_time_sang
 
-    patient_ready = {bn['Ma_BN']: base_time_sang for bn in st.session_state.bn_list}
+    patient_ready = {bn['Ma_BN']: staff_ready.get(bn['BS_Kham'], base_time_sang) for bn in st.session_state.bn_list}
     schedule_records = []
     actual_bs_dict = {}
 
@@ -358,6 +407,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH TỐI ƯU HÔM NAY", type="primary"
         ma_bn, actual_bs = bn['Ma_BN'], bn['BS_Kham']
         if actual_bs not in staff_shifts: actual_bs = min(bs_list, key=lambda b: staff_ready[b])
         adj_time = adjust_for_lunch_break(max(staff_ready[actual_bs], patient_ready[ma_bn]), 5, date_str)
+        
         if not is_staff_available(actual_bs, adj_time, staff_shifts):
             available_bs = [b for b in bs_list if is_staff_available(b, adjust_for_lunch_break(max(staff_ready[b], patient_ready[ma_bn]), 5, date_str), staff_shifts)]
             if available_bs:
@@ -365,19 +415,27 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH TỐI ƯU HÔM NAY", type="primary"
                 adj_time = adjust_for_lunch_break(max(staff_ready[actual_bs], patient_ready[ma_bn]), 5, date_str)
 
         actual_bs_dict[ma_bn] = actual_bs
-        schedule_records.append(dict(Task="Khám bệnh", Base_Task="Khám bệnh", Loai_Thoi_Gian="Thực hiện", Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=actual_bs, Ten_NV_Full=ten_nv_dict.get(actual_bs, actual_bs), Start=adj_time, Finish=adj_time + timedelta(minutes=5)))
-        staff_ready[actual_bs] = adj_time + timedelta(minutes=5)
-        patient_ready[ma_bn] = adj_time + timedelta(minutes=5)
+        end_exam = adj_time + timedelta(minutes=5)
+        schedule_records.append(dict(Task="Khám bệnh", Base_Task="Khám bệnh", Loai_Thoi_Gian="Thực hiện", Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=actual_bs, Ten_NV_Full=ten_nv_dict.get(actual_bs, actual_bs), Start=adj_time, Finish=end_exam))
+        
+        staff_ready[actual_bs] = end_exam
+        patient_ready[ma_bn] = end_exam + timedelta(minutes=2)
 
     machine_pool = {}
+    machine_capacities = {
+        'Máy điện xung': 2, 'Máy từ trường': 1, 'Máy xoa bóp': 2, 'Máy kéo dãn': 1, 
+        'Máy kéo': 1, 'Máy siêu âm': 2, 'Máy Laser': 1, 'Máy xung kích': 1, 
+        'Máy hồng ngoại': 3, 'Máy Laser NM': 2, 'Máy Parafin': 2, 'Máy sóng ngắn': 1,
+        'Không': 76, 'Không dùng máy': 76
+    }
     for _, row in df_thongso.iterrows():
         may = str(row['Yeu_Cau_May_Moc']).strip()
-        if may not in machine_pool: machine_pool[may] = [base_time_sang] * {'Máy điện xung': 2, 'Máy từ trường': 1, 'Máy xoa bóp': 2, 'Máy kéo dãn': 1, 'Máy kéo': 1, 'Máy siêu âm': 2, 'Máy Laser': 1, 'Máy xung kích': 1, 'Không': 76, 'Không dùng máy': 76}.get(may, 1)
+        if may not in machine_pool: machine_pool[may] = [base_time_sang] * machine_capacities.get(may, 1)
     if 'Không' not in machine_pool: machine_pool['Không'] = [base_time_sang] * 76
     tt_dict = df_thongso.set_index('Ma_Thu_Thuat').to_dict('index')
     
     while jobs:
-        jobs.sort(key=lambda j: (patient_ready[j['Ma_BN']], j['Created_At']))
+        jobs.sort(key=lambda j: (j['Discharge_Time'], patient_ready[j['Ma_BN']], j['Created_At']))
         job = jobs.pop(0)
         ma_bn, ma_tt, actual_bs = job['Ma_BN'], job['Ma_Thu_Thuat'], actual_bs_dict[job['Ma_BN']]
         tt_info = tt_dict[ma_tt]
@@ -387,6 +445,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH TỐI ƯU HÔM NAY", type="primary"
         
         potential_staff = [actual_bs] + [b for b in bs_list if b != actual_bs] if tt_info['Nguoi_Phu_Trach'] == 'BS' else ktv_list
         earliest_start, best_staff, best_machine_idx = datetime.max, None, None
+        valid_slot_found = False
         
         for s in potential_staff:
             if s not in staff_ready: continue
@@ -396,14 +455,24 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH TỐI ƯU HÔM NAY", type="primary"
                 if tt_info['Nguoi_Phu_Trach'] == 'BS' and s != actual_bs:
                     prim_adj = adjust_for_lunch_break(max(patient_ready[ma_bn], staff_ready[actual_bs], m_ready), thao_tac + cho, date_str)
                     if is_staff_available(actual_bs, prim_adj, staff_shifts): continue
-                if adj_start < earliest_start: earliest_start, best_staff, best_machine_idx = adj_start, s, m_idx
+                
+                if adj_start + timedelta(minutes=thao_tac+cho) <= job['Discharge_Time']:
+                    if adj_start < earliest_start: 
+                        earliest_start, best_staff, best_machine_idx = adj_start, s, m_idx
+                        valid_slot_found = True
 
-        if best_staff is None:
+        if not valid_slot_found:
             for s in potential_staff:
                 if s not in staff_ready: continue
                 for m_idx, m_ready in enumerate(machine_pool[may_moc]):
                     adj_start = adjust_for_lunch_break(max(patient_ready[ma_bn], staff_ready[s], m_ready), thao_tac + cho, date_str)
-                    if adj_start < earliest_start: earliest_start, best_staff, best_machine_idx = adj_start, s, m_idx
+                    if not is_staff_available(s, adj_start, staff_shifts): continue
+                    if tt_info['Nguoi_Phu_Trach'] == 'BS' and s != actual_bs:
+                        prim_adj = adjust_for_lunch_break(max(patient_ready[ma_bn], staff_ready[actual_bs], m_ready), thao_tac + cho, date_str)
+                        if is_staff_available(actual_bs, prim_adj, staff_shifts): continue
+                        
+                    if adj_start < earliest_start: 
+                        earliest_start, best_staff, best_machine_idx = adj_start, s, m_idx
                     
         end_active = earliest_start + timedelta(minutes=thao_tac) 
         end_total = end_active + timedelta(minutes=cho)       
@@ -426,7 +495,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH TỐI ƯU HÔM NAY", type="primary"
 # ==========================================
 if 'df_schedule' in st.session_state:
     df_schedule = st.session_state.df_schedule
-    st.success(f"✅ Đã tải thành công lịch cho ngày: {selected_date.strftime('%d/%m/%Y')}")
+    st.success(f"✅ Đã lập xong lịch cho ngày: {selected_date.strftime('%d/%m/%Y')}")
 
     df_schedule['Start_str'] = df_schedule['Start'].dt.strftime('%H:%M')
     df_schedule['Finish_str'] = df_schedule['Finish'].dt.strftime('%H:%M')
@@ -458,7 +527,6 @@ if 'df_schedule' in st.session_state:
 
     st.divider()
     
-    # === TÍNH NĂNG MỚI: THU GỌN BIỂU ĐỒ GANTT ===
     with st.expander("📊 HIỂN THỊ / THU GỌN BIỂU ĐỒ GANTT", expanded=False):
         def sort_nv_group(name): return (name.replace(" (Theo dõi)", ""), 1 if " (Theo dõi)" in name else 0)
         y_order = sorted(df_schedule['Nhan_Vien'].unique(), key=sort_nv_group)
@@ -475,5 +543,9 @@ if 'df_schedule' in st.session_state:
         fig_bn.update_layout(yaxis=dict(autorange="reversed", title=""), showlegend=False, uniformtext_minsize=10, uniformtext_mode='hide', xaxis_tickformat="%H:%M", xaxis_title="", plot_bgcolor="rgba(240, 240, 240, 0.5)", height=500)
         st.plotly_chart(fig_bn, use_container_width=True)
 
-st.markdown("---")
-st.markdown("<div style='text-align: center; color: gray; font-weight: bold;'>XÂY DỰNG BỞI BS.MAI HUỲNH NGỌC TÂN - BS.LÊ UYÊN PHƯƠNG VY</div>", unsafe_allow_html=True)
+# ĐỊNH DẠNG LẠI TÊN TÁC GIẢ BÊN DƯỚI
+st.markdown("""
+    <div style='text-align: center; font-size: 1.2rem; font-weight: bold; margin-top: 30px; color: #34495E;'>
+        XÂY DỰNG BỞI <span style='color: #0000FF;'>BS. MAI HUỲNH NGỌC TÂN</span> - <span style='color: #8E44AD;'>BS. LÊ UYÊN PHƯƠNG VY</span>
+    </div>
+""", unsafe_allow_html=True)
