@@ -13,31 +13,21 @@ import streamlit.components.v1 as components
 # ==========================================
 st.set_page_config(layout="wide", page_title="reTIME", page_icon="⏱️")
 
-# CHÈN MÃ JAVASCRIPT: CHẶN ENTER NỘP FORM & CHUYỂN Ô KẾ TIẾP
 components.html("""
 <script>
 if (!window.parent.document.getElementById('enter-to-tab-script')) {
     const script = window.parent.document.createElement('script');
     script.id = 'enter-to-tab-script';
     script.innerHTML = `
-        // Tham số 'true' cuối cùng giúp chặn sự kiện trước khi Streamlit kịp nhận diện
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Enter') {
                 const active = document.activeElement;
-                
-                // 1. Nếu đang chọn nút Lập Hồ Sơ (hoặc button bất kỳ), cho phép Enter nộp form
                 if (active && active.tagName === 'BUTTON') return;
-                
-                // 2. Nếu đang ở ô nhập Text (Tên BN, Giờ ra viện), CHẶN form nộp và nhảy ô
                 if (active && active.tagName === 'INPUT' && active.getAttribute('role') !== 'combobox') {
                     e.preventDefault();
                     e.stopPropagation();
-                    
-                    // Gom toàn bộ input, hộp thoại chọn và button đang hiển thị
                     const elements = Array.from(document.querySelectorAll('input:not([disabled]), div[data-baseweb="select"] input, button:not([disabled])'));
                     const index = elements.indexOf(active);
-                    
-                    // Chuyển Focus sang phần tử tiếp theo
                     if (index > -1 && index < elements.length - 1) {
                         elements[index + 1].focus();
                     }
@@ -50,14 +40,10 @@ if (!window.parent.document.getElementById('enter-to-tab-script')) {
 </script>
 """, height=0, width=0)
 
-# CSS: TÙY CHỈNH MÀU NÚT BẤM
 st.markdown("""
     <style>
-    /* Nút chính (Lập hồ sơ, Tiến hành xếp lịch) -> Đổi sang MÀU XANH LÁ (Green) */
     button[kind="primary"] { background-color: #27AE60 !important; border-color: #27AE60 !important; color: white !important; font-weight: bold; }
     button[kind="primary"]:hover { background-color: #1E8449 !important; border-color: #1E8449 !important; }
-    
-    /* Nút phụ (Xóa, Ra viện, Làm mới) -> Giữ MÀU CAM dịu mắt */
     button[kind="secondary"] { background-color: #F39C12 !important; border-color: #F39C12 !important; color: white !important; font-weight: bold;}
     button[kind="secondary"]:hover { background-color: #E67E22 !important; border-color: #E67E22 !important; }
     </style>
@@ -74,7 +60,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# HÀM XỬ LÝ LƯU TRỮ VÀ DỌN DẸP TỰ ĐỘNG
+# HÀM LƯU TRỮ ĐỒNG BỘ 2 CHIỀU (LOCAL + GOOGLE SHEETS)
 # ==========================================
 def cleanup_old_files():
     limit_date = datetime.today().date() - timedelta(days=7)
@@ -83,8 +69,66 @@ def cleanup_old_files():
             if f.startswith(('ns_', 'bn_', 'sched_')) and (f.endswith('.csv') or f.endswith('.json')):
                 date_str = f.split('_')[1].split('.')[0]
                 if datetime.strptime(date_str, "%Y-%m-%d").date() < limit_date: os.remove(f)
-    except Exception: pass
+    except: pass
 cleanup_old_files()
+
+def sanitize_bn_list(bn_list):
+    for bn in bn_list:
+        if 'Gio_Ra_Vien' not in bn: bn['Gio_Ra_Vien'] = ""
+    return bn_list
+
+USE_GSHEETS = False
+try:
+    from streamlit_gsheets import GSheetsConnection
+    conn = st.connection("gsheets", type=GSheetsConnection)
+    USE_GSHEETS = True
+except Exception: USE_GSHEETS = False
+
+def update_gsheets_safe(worksheet_name, df_day, date_str):
+    if not USE_GSHEETS: return
+    try:
+        try:
+            df_all = conn.read(worksheet=worksheet_name, ttl=0)
+            if df_all.empty or 'Date' not in df_all.columns:
+                df_all = pd.DataFrame(columns=['Date'] + list(df_day.columns))
+        except: df_all = pd.DataFrame(columns=['Date'] + list(df_day.columns))
+
+        # Dọn rác 7 ngày trực tiếp trên Google Sheets
+        limit_date_str = (datetime.today().date() - timedelta(days=7)).strftime("%Y-%m-%d")
+        df_all = df_all[df_all['Date'] >= limit_date_str]
+        
+        # Xóa dữ liệu của ngày hiện tại để ghi đè mảng mới
+        df_all = df_all[df_all['Date'] != date_str]
+
+        df_new = df_day.copy()
+        if not df_new.empty:
+            df_new['Date'] = date_str
+            df_all = pd.concat([df_all, df_new], ignore_index=True)
+
+        conn.update(worksheet=worksheet_name, data=df_all)
+    except: pass
+
+def get_data_from_db(worksheet_name, target_date_str):
+    if not USE_GSHEETS: return None
+    try:
+        df_all = conn.read(worksheet=worksheet_name, ttl=0)
+        if df_all.empty or 'Date' not in df_all.columns: return None
+        df_day = df_all[df_all['Date'] == target_date_str]
+        if df_day.empty: return None
+        return df_day.drop(columns=['Date'])
+    except: return None
+
+def get_fallback_from_db(worksheet_name, target_date):
+    if not USE_GSHEETS: return None
+    target_date_str = target_date.strftime("%Y-%m-%d")
+    try:
+        df_all = conn.read(worksheet=worksheet_name, ttl=0)
+        if df_all.empty or 'Date' not in df_all.columns: return None
+        df_past = df_all[df_all['Date'] < target_date_str].sort_values(by='Date', ascending=False)
+        if df_past.empty: return None
+        latest_date = df_past.iloc[0]['Date']
+        return df_past[df_past['Date'] == latest_date].drop(columns=['Date'])
+    except: return None
 
 def get_fallback_file(prefix, ext, target_date):
     for i in range(1, 8):
@@ -93,24 +137,7 @@ def get_fallback_file(prefix, ext, target_date):
         if os.path.exists(test_path): return test_path
     return None
 
-def sanitize_bn_list(bn_list):
-    for bn in bn_list:
-        if 'Gio_Ra_Vien' not in bn: bn['Gio_Ra_Vien'] = ""
-    return bn_list
-
-# KẾT NỐI GOOGLE SHEETS
-USE_GSHEETS = False
-try:
-    from streamlit_gsheets import GSheetsConnection
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    USE_GSHEETS = True
-except Exception: USE_GSHEETS = False
-
-def load_ns_data_db():
-    if USE_GSHEETS:
-        try: return conn.read(worksheet="NhanSu", ttl=0)
-        except: pass
-    if os.path.exists("autosave_ns.csv"): return pd.read_csv("autosave_ns.csv")
+def get_default_ns():
     return pd.DataFrame({
         'Di_Lam': [True]*11, 
         'Ma_Nhan_Vien': ['bs-Quyen', 'bs-Hong', 'bs-Trung', 'bs-Thu', 'bs-Vy', 'bs-Thanh', 'bs-Nha', 'ktv-Huu', 'ktv-Duyen', 'ktv-LuanPhien1', 'ktv-LuanPhien2'],
@@ -118,25 +145,19 @@ def load_ns_data_db():
         'Ca_Lam_Viec': ['Cả ngày']*11, 'Gio_Bat_Dau': ['07:10']*11, 'Ghi_Chu': ['']*11
     })
 
-def save_ns_data_db(df):
-    if USE_GSHEETS: conn.update(worksheet="NhanSu", data=df)
-    else: df.to_csv("autosave_ns.csv", index=False)
+def save_ns_data_db(df, date_str):
+    df.to_csv(f"ns_{date_str}.csv", index=False)
+    update_gsheets_safe("NhanSu", df, date_str)
 
-def load_bn_data_db():
-    if USE_GSHEETS:
-        try: return sanitize_bn_list(conn.read(worksheet="BenhNhan", ttl=0).to_dict('records'))
-        except: pass
-    if os.path.exists('autosave_bn_list.json'):
-        with open('autosave_bn_list.json', 'r', encoding='utf-8') as f: return sanitize_bn_list(json.load(f))
-    return []
+def save_bn_data_db(bn_list, date_str):
+    with open(f"bn_{date_str}.json", 'w', encoding='utf-8') as f: json.dump(bn_list, f, ensure_ascii=False, indent=2)
+    df = pd.DataFrame(bn_list)
+    if df.empty: df = pd.DataFrame(columns=["Ma_BN", "Ten_BN", "BS_Kham", "Y_Lenh", "Created_At", "Gio_Ra_Vien"])
+    update_gsheets_safe("BenhNhan", df, date_str)
 
-def save_bn_data_db(bn_list):
-    if USE_GSHEETS:
-        df = pd.DataFrame(bn_list)
-        if df.empty: df = pd.DataFrame(columns=["Ma_BN", "Ten_BN", "BS_Kham", "Y_Lenh", "Created_At", "Gio_Ra_Vien"])
-        conn.update(worksheet="BenhNhan", data=df)
-    else:
-        with open('autosave_bn_list.json', 'w', encoding='utf-8') as f: json.dump(bn_list, f, ensure_ascii=False, indent=2)
+def save_sched_data_db(df, date_str):
+    df.to_json(f"sched_{date_str}.json", orient='records', date_format='iso')
+    update_gsheets_safe("LichTrinh", df, date_str)
 
 def parse_time_input(time_str):
     if pd.isna(time_str): return ""
@@ -149,16 +170,12 @@ def parse_time_input(time_str):
 
 @st.cache_data
 def load_base_data(file_name):
-    # Tự động dò tìm đường dẫn gốc của ứng dụng trên máy chủ
     current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(current_dir, file_name)
     return pd.read_excel(file_path, sheet_name='Thong_So_Co_Dinh')
 
-try: 
-    df_thongso = load_base_data('data.xlsx')
-except Exception as e: 
-    st.error(f"⚠️ Không tìm thấy file 'data.xlsx'. Lỗi hệ thống: {e}")
-    st.stop()
+try: df_thongso = load_base_data('data.xlsx')
+except Exception as e: st.error(f"⚠️ Không tìm thấy file 'data.xlsx'. Lỗi hệ thống: {e}"); st.stop()
 
 # ==========================================
 # THANH CÔNG CỤ CHỌN NGÀY & LÀM MỚI 
@@ -172,22 +189,34 @@ with col_btn:
         date_str = selected_date.strftime("%Y-%m-%d")
         for pfx, ext in [('ns', 'csv'), ('bn', 'json'), ('sched', 'json')]:
             if os.path.exists(f"{pfx}_{date_str}.{ext}"): os.remove(f"{pfx}_{date_str}.{ext}")
+        if USE_GSHEETS:
+            update_gsheets_safe("NhanSu", pd.DataFrame(), date_str)
+            update_gsheets_safe("BenhNhan", pd.DataFrame(), date_str)
+            update_gsheets_safe("LichTrinh", pd.DataFrame(), date_str)
         st.session_state.clear()
         st.rerun()
 
 date_str = selected_date.strftime("%Y-%m-%d")
 
-if USE_GSHEETS: st.caption("🟢 Đang kết nối Google Sheets (Lưu đám mây)")
-else: st.caption("🟡 Đang lưu nội bộ (Tự động xóa lịch sử cũ hơn 7 ngày)")
+if USE_GSHEETS: st.caption("🟢 Đang kết nối Google Sheets")
+else: st.caption("🟡 Đang hoạt động offline")
 
+# TÍNH NĂNG TIME TRAVEL: KẾT HỢP ĐỌC TỪ LOCAL -> GOOGLE SHEETS
 if 'selected_date' not in st.session_state or st.session_state.selected_date != selected_date:
     st.session_state.selected_date = selected_date
     
+    # 1. LOAD NHÂN SỰ
     if os.path.exists(f"ns_{date_str}.csv"): st.session_state.ns_data = pd.read_csv(f"ns_{date_str}.csv")
     else:
-        fb_ns = get_fallback_file('ns', 'csv', selected_date)
-        if fb_ns: st.session_state.ns_data = pd.read_csv(fb_ns)
-        else: st.session_state.ns_data = load_ns_data_db()
+        db_data = get_data_from_db("NhanSu", date_str)
+        if db_data is not None: st.session_state.ns_data = db_data
+        else:
+            fb_ns = get_fallback_file('ns', 'csv', selected_date)
+            if fb_ns: st.session_state.ns_data = pd.read_csv(fb_ns)
+            else:
+                fb_db = get_fallback_from_db("NhanSu", selected_date)
+                if fb_db is not None: st.session_state.ns_data = fb_db
+                else: st.session_state.ns_data = get_default_ns()
             
     st.session_state.ns_data['Di_Lam'] = st.session_state.ns_data['Di_Lam'].astype(bool)
     if 'Gio_Bat_Dau' not in st.session_state.ns_data.columns: st.session_state.ns_data['Gio_Bat_Dau'] = '07:10'
@@ -195,20 +224,34 @@ if 'selected_date' not in st.session_state or st.session_state.selected_date != 
         if col in st.session_state.ns_data.columns:
             st.session_state.ns_data[col] = st.session_state.ns_data[col].fillna("").astype(str).replace("nan", "")
 
+    # 2. LOAD BỆNH NHÂN
     if os.path.exists(f"bn_{date_str}.json"):
         with open(f"bn_{date_str}.json", 'r', encoding='utf-8') as f: st.session_state.bn_list = sanitize_bn_list(json.load(f))
     else:
-        fb_bn = get_fallback_file('bn', 'json', selected_date)
-        if fb_bn: 
-            with open(fb_bn, 'r', encoding='utf-8') as f: st.session_state.bn_list = sanitize_bn_list(json.load(f))
-        else: st.session_state.bn_list = load_bn_data_db()
+        db_data = get_data_from_db("BenhNhan", date_str)
+        if db_data is not None: st.session_state.bn_list = sanitize_bn_list(db_data.to_dict('records'))
+        else:
+            fb_bn = get_fallback_file('bn', 'json', selected_date)
+            if fb_bn: 
+                with open(fb_bn, 'r', encoding='utf-8') as f: st.session_state.bn_list = sanitize_bn_list(json.load(f))
+            else:
+                fb_db = get_fallback_from_db("BenhNhan", selected_date)
+                if fb_db is not None: st.session_state.bn_list = sanitize_bn_list(fb_db.to_dict('records'))
+                else: st.session_state.bn_list = []
         
+    # 3. LOAD LỊCH TRÌNH (BIỂU ĐỒ)
     if os.path.exists(f"sched_{date_str}.json"):
         st.session_state.df_schedule = pd.read_json(f"sched_{date_str}.json", orient='records')
         st.session_state.df_schedule['Start'] = pd.to_datetime(st.session_state.df_schedule['Start'])
         st.session_state.df_schedule['Finish'] = pd.to_datetime(st.session_state.df_schedule['Finish'])
     else:
-        if 'df_schedule' in st.session_state: del st.session_state['df_schedule']
+        db_data = get_data_from_db("LichTrinh", date_str)
+        if db_data is not None:
+            st.session_state.df_schedule = db_data
+            st.session_state.df_schedule['Start'] = pd.to_datetime(st.session_state.df_schedule['Start'])
+            st.session_state.df_schedule['Finish'] = pd.to_datetime(st.session_state.df_schedule['Finish'])
+        else:
+            if 'df_schedule' in st.session_state: del st.session_state['df_schedule']
     
     st.rerun()
 
@@ -230,7 +273,7 @@ with st.expander("⚙️ Quản lý Nhân sự (Thêm mới / Xóa)"):
                 new_ma = f"{prefix}-{new_ten.split()[-1]}{len(st.session_state.ns_data)}"
                 new_row = pd.DataFrame([{'Di_Lam': True, 'Ma_Nhan_Vien': new_ma, 'Ten_Nhan_Vien': new_ten, 'Ca_Lam_Viec': 'Cả ngày', 'Gio_Bat_Dau': '07:10', 'Ghi_Chu': ''}])
                 st.session_state.ns_data = pd.concat([st.session_state.ns_data, new_row], ignore_index=True)
-                save_ns_data_db(st.session_state.ns_data)
+                save_ns_data_db(st.session_state.ns_data, date_str)
                 st.rerun()
                 
     st.divider()
@@ -242,7 +285,7 @@ with st.expander("⚙️ Quản lý Nhân sự (Thêm mới / Xóa)"):
         if st.button("Xóa nhân viên", type="secondary", use_container_width=True):
             if nv_xoa != "-- Chọn --":
                 st.session_state.ns_data = st.session_state.ns_data[st.session_state.ns_data['Ten_Nhan_Vien'] != nv_xoa].reset_index(drop=True)
-                save_ns_data_db(st.session_state.ns_data)
+                save_ns_data_db(st.session_state.ns_data, date_str)
                 st.rerun()
 
 edited_ns = st.data_editor(
@@ -266,8 +309,7 @@ if not edited_ns.equals(st.session_state.ns_data):
                 edited_ns.at[i, 'Gio_Bat_Dau'] = parsed
                 
     st.session_state.ns_data = edited_ns.copy()
-    save_ns_data_db(st.session_state.ns_data)
-    edited_ns.to_csv(f"ns_{date_str}.csv", index=False)
+    save_ns_data_db(st.session_state.ns_data, date_str)
     st.rerun() 
 
 active_staff = edited_ns[edited_ns['Di_Lam'] == True]
@@ -312,8 +354,7 @@ with col_form:
                         "Y_Lenh": ", ".join(y_lenh_chon), "Created_At": datetime.now().timestamp(),
                         "Gio_Ra_Vien": parse_time_input(gio_ra_vien)
                     })
-                    save_bn_data_db(st.session_state.bn_list)
-                    with open(f"bn_{date_str}.json", 'w', encoding='utf-8') as f: json.dump(st.session_state.bn_list, f, ensure_ascii=False)
+                    save_bn_data_db(st.session_state.bn_list, date_str)
                     st.success(f"Đã lập hồ sơ: {ten_bn} (Mã: {ma_bn})")
                     st.rerun()
 
@@ -332,7 +373,7 @@ with col_table:
                 
                 col_e1, col_e2 = st.columns(2)
                 with col_e1: edit_bs = st.selectbox("Đổi BS phụ trách:", options=bs_list, format_func=lambda x: ten_nv_dict.get(x, x), index=bs_list.index(selected_bn['BS_Kham']) if selected_bn['BS_Kham'] in bs_list else 0)
-                with col_e2: edit_rv = st.text_input("Giờ ra viện mới:", value=selected_bn.get('Gio_Ra_Vien', ''))
+                with col_e2: edit_rv = st.text_input("Giờ ra viện mới, VD 16:30 ", value=selected_bn.get('Gio_Ra_Vien', ''))
                 
                 edit_yl = st.multiselect("Thêm/Bớt Thủ thuật:", options=danh_sach_thu_thuat, default=current_yl)
                 
@@ -341,13 +382,11 @@ with col_table:
                     st.session_state.bn_list[edit_idx]['BS_Kham'] = edit_bs
                     st.session_state.bn_list[edit_idx]['Y_Lenh'] = ", ".join(edit_yl)
                     st.session_state.bn_list[edit_idx]['Gio_Ra_Vien'] = parse_time_input(edit_rv)
-                    save_bn_data_db(st.session_state.bn_list)
-                    with open(f"bn_{date_str}.json", 'w', encoding='utf-8') as f: json.dump(st.session_state.bn_list, f, ensure_ascii=False)
+                    save_bn_data_db(st.session_state.bn_list, date_str)
                     st.rerun()
                 if col_btn2.button("🏥 Ra viện", type="secondary", use_container_width=True):
                     st.session_state.bn_list.pop(edit_idx)
-                    save_bn_data_db(st.session_state.bn_list)
-                    with open(f"bn_{date_str}.json", 'w', encoding='utf-8') as f: json.dump(st.session_state.bn_list, f, ensure_ascii=False)
+                    save_bn_data_db(st.session_state.bn_list, date_str)
                     st.rerun()
         else: st.info("Khoa hiện không có bệnh nhân.")
 
@@ -370,7 +409,7 @@ def is_staff_available(staff_id, start_t, staff_shifts):
     if shift == "Chiều" and start_t.hour < 12: return False 
     return True
 
-if st.button("🚀 TIẾN HÀNH XẾP LỊCH TỐI ƯU HÔM NAY", type="primary", use_container_width=True):
+if st.button("🚀 TIẾN HÀNH XẾP LỊCH TỰ ĐỘNG", type="primary", use_container_width=True):
     if len(st.session_state.bn_list) == 0: st.stop()
 
     jobs = []
@@ -493,7 +532,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH TỐI ƯU HÔM NAY", type="primary"
 
     df_sched = pd.DataFrame(schedule_records)
     st.session_state.df_schedule = df_sched
-    df_sched.to_json(f"sched_{date_str}.json", orient='records', date_format='iso')
+    save_sched_data_db(df_sched, date_str)
     st.rerun()
 
 # ==========================================
@@ -514,19 +553,19 @@ if 'df_schedule' in st.session_state:
 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer: df_export.to_excel(writer, index=False, sheet_name='Lich_Trinh')
-    st.download_button("📥 TẢI XUỐNG FILE EXCEL LỊCH PHÂN CÔNG", data=buffer.getvalue(), file_name=f"Lich_YHCT_{selected_date.strftime('%Y%m%d')}.xlsx", type="primary")
+    st.download_button("📥 TẢI XUỐNG FILE EXCEL LỊCH SẮP XẾP", data=buffer.getvalue(), file_name=f"Lich_YHCT_{selected_date.strftime('%Y%m%d')}.xlsx", type="primary")
     st.divider()
 
     st.markdown("<h3 style='color: #8E44AD; border-bottom: 2px solid #8E44AD; padding-bottom: 5px;'>4. TRA CỨU LỊCH TRÌNH CÁ NHÂN</h3>", unsafe_allow_html=True)
     col_tc_nv, col_tc_bn = st.columns(2)
     with col_tc_nv:
-        nv_chon = st.selectbox("Tra cứu lịch Nhân viên:", options=["-- Chọn Nhân viên --"] + list(df_schedule['Ten_NV_Full'].str.replace(" (Theo dõi)", "").unique()))
+        nv_chon = st.selectbox("Xem lịch Nhân viên:", options=["-- Chọn Nhân viên --"] + list(df_schedule['Ten_NV_Full'].str.replace(" (Theo dõi)", "").unique()))
         if nv_chon != "-- Chọn Nhân viên --":
             df_nv = df_schedule[df_schedule['Ten_NV_Full'].str.contains(nv_chon, regex=False)].sort_values(by='Start')
             st.dataframe(df_nv[['Start_str', 'Finish_str', 'Task', 'Ten_BN']].rename(columns={'Start_str': 'Bắt đầu', 'Finish_str': 'Kết thúc', 'Task': 'Công việc', 'Ten_BN': 'Bệnh nhân'}), hide_index=True, use_container_width=True)
 
     with col_tc_bn:
-        bn_chon = st.selectbox("Tra cứu lịch Bệnh nhân:", options=["-- Chọn Bệnh nhân --"] + list(df_schedule['Ten_BN'].unique()))
+        bn_chon = st.selectbox("Xem lịch Bệnh nhân:", options=["-- Chọn Bệnh nhân --"] + list(df_schedule['Ten_BN'].unique()))
         if bn_chon != "-- Chọn Bệnh nhân --":
             df_bn = df_schedule[df_schedule['Ten_BN'] == bn_chon].sort_values(by='Start')
             st.dataframe(df_bn[['Start_str', 'Finish_str', 'Task', 'Ten_NV_Full']].rename(columns={'Start_str': 'Bắt đầu', 'Finish_str': 'Kết thúc', 'Task': 'Thủ thuật', 'Ten_NV_Full': 'Nhân viên phụ trách'}), hide_index=True, use_container_width=True)
@@ -537,7 +576,7 @@ if 'df_schedule' in st.session_state:
         def sort_nv_group(name): return (name.replace(" (Theo dõi)", ""), 1 if " (Theo dõi)" in name else 0)
         y_order = sorted(df_schedule['Nhan_Vien'].unique(), key=sort_nv_group)
 
-        st.subheader("Lịch trình Tổng quát Nhân viên")
+        st.subheader("Lịch tổng quát Nhân viên")
         fig_nv = px.timeline(df_schedule, x_start="Start", x_end="Finish", y="Nhan_Vien", color="Base_Task", text="Ma_BN", custom_data=['Task', 'Start_str', 'Finish_str', 'Ten_BN', 'Ten_NV_Full'])
         fig_nv.update_traces(marker_line_color='rgba(0,0,0,0.7)', marker_line_width=1.5, opacity=0.9, textfont=dict(color='white', size=13, weight="bold"), hovertemplate="<b>%{customdata[4]}</b><br>Bệnh nhân: %{customdata[3]}<br>Thủ thuật: %{customdata[0]}<br>Thời gian: %{customdata[1]} - %{customdata[2]}<extra></extra>", textposition='inside', insidetextanchor='middle')
         fig_nv.update_layout(yaxis=dict(categoryorder='array', categoryarray=y_order, autorange="reversed", title=""), legend_title="Chú thích Y lệnh", uniformtext_minsize=10, uniformtext_mode='hide', xaxis_tickformat="%H:%M", xaxis_title="", plot_bgcolor="rgba(240, 240, 240, 0.5)", height=700)
@@ -549,6 +588,7 @@ if 'df_schedule' in st.session_state:
         fig_bn.update_layout(yaxis=dict(autorange="reversed", title=""), showlegend=False, uniformtext_minsize=10, uniformtext_mode='hide', xaxis_tickformat="%H:%M", xaxis_title="", plot_bgcolor="rgba(240, 240, 240, 0.5)", height=500)
         st.plotly_chart(fig_bn, use_container_width=True)
 
+st.markdown("---")
 # ĐỊNH DẠNG LẠI TÊN TÁC GIẢ BÊN DƯỚI
 st.markdown("""
     <div style='text-align: center; font-size: 1.2rem; font-weight: bold; margin-top: 30px; color: #34495E;'>
