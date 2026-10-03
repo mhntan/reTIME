@@ -493,7 +493,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             if not check_shift(t, staff_shifts[bs], limit_morning, start_afternoon):
                 t += timedelta(minutes=1); continue
 
-            c_p = get_conflict_end(patient_busy[ma_bn], t, end_t)
+            c_p = get_conflict_end(patient_busy[ma_bn], t, end_t + timedelta(minutes=2))
             if c_p: t = c_p; continue
 
             c_s = get_conflict_end(staff_active_busy[bs], t, end_t + timedelta(minutes=2))
@@ -503,7 +503,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             break
             
         if scheduled:
-            patient_busy[ma_bn].append((t, end_t))
+            patient_busy[ma_bn].append((t, end_t + timedelta(minutes=2)))
             staff_active_busy[bs].append((t, end_t + timedelta(minutes=2)))
             patient_ready[ma_bn] = end_t + timedelta(minutes=2) # Lưu giờ BS khám xong
             schedule_records.append(dict(Task="Khám bệnh", Base_Task="Khám bệnh", Loai_Thoi_Gian="Thực hiện", Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=bs, Ten_NV_Full=ten_nv_dict.get(bs, bs), Start=t, Finish=end_t))
@@ -527,7 +527,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             if not check_shift(t, staff_shifts[bs], limit_morning, start_afternoon):
                 t += timedelta(minutes=1); continue
 
-            c_p = get_conflict_end(patient_busy[ma_bn], t, end_t)
+            c_p = get_conflict_end(patient_busy[ma_bn], t, end_t + timedelta(minutes=2))
             if c_p: t = c_p; continue
 
             c_s = get_conflict_end(staff_active_busy[bs], t, end_t + timedelta(minutes=2))
@@ -537,7 +537,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             break
             
         if scheduled:
-            patient_busy[ma_bn].append((t, end_t))
+            patient_busy[ma_bn].append((t, end_t + timedelta(minutes=2)))
             staff_active_busy[bs].append((t, end_t + timedelta(minutes=2)))
             patient_ready[ma_bn] = end_t + timedelta(minutes=2) # Lưu giờ BS khám xong
             schedule_records.append(dict(Task="Khám bệnh", Base_Task="Khám bệnh", Loai_Thoi_Gian="Thực hiện", Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=bs, Ten_NV_Full=ten_nv_dict.get(bs, bs), Start=t, Finish=end_t))
@@ -596,7 +596,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
                 if t < limit_morning and end_total > limit_morning: t = start_afternoon; continue
                 if limit_morning <= t < start_afternoon: t = start_afternoon; continue
                     
-                c_p = get_conflict_end(patient_busy[ma_bn], t, end_total)
+                c_p = get_conflict_end(patient_busy[ma_bn], t, end_total + timedelta(minutes=2))
                 if c_p: t = c_p; continue
                     
                 m_idx, min_m_c = None, limit_end_of_day
@@ -652,7 +652,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
         if cho > 0:
             schedule_records.append(dict(Task=f"{job['Ten_Thu_Thuat']} - Lưu", Base_Task=job['Ten_Thu_Thuat'], Loai_Thoi_Gian="Theo dõi", Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=f"{best_staff} (Theo dõi)", Ten_NV_Full=f"{ten_nv_dict.get(best_staff, best_staff)} (Theo dõi)", Start=end_active, Finish=end_total))
             
-        patient_busy[ma_bn].append((best_start, end_total))
+        patient_busy[ma_bn].append((best_start, end_total + timedelta(minutes=2)))
         staff_active_busy[best_staff].append((best_start, end_active + timedelta(minutes=2)))
         machine_busy[may_moc][best_machine_idx].append((best_start, end_total))
 
