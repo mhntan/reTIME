@@ -465,10 +465,65 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
         else:
             staff_starts[nv] = start_afternoon if ca == "Chiều" else base_time_sang
 
+    # ================== KHÔI PHỤC LỊCH ĐÃ XẾP TRƯỚC ĐÓ ==================
+    scheduled_khambenh = set()
+    scheduled_thuthuat = []
+    tt_dict = df_thongso.set_index('Ma_Thu_Thuat').to_dict('index')
+    
+    if 'df_schedule' in st.session_state and not st.session_state.df_schedule.empty:
+        df_old = st.session_state.df_schedule.copy()
+        for _, row in df_old.iterrows():
+            ma_bn = row['Ma_BN']
+            if ma_bn not in all_bn: continue
+            
+            b_task = row['Base_Task']
+            t_start = row['Start']
+            t_finish = row['Finish']
+            nv = row['Nhan_Vien']
+            l_tg = row.get('Loai_Thoi_Gian', 'Thực hiện')
+            
+            bn_obj = next((b for b in st.session_state.bn_list if b['Ma_BN'] == ma_bn), None)
+            if not bn_obj: continue
+            
+            if b_task == "Khám bệnh":
+                if l_tg == "Thực hiện":
+                    scheduled_khambenh.add(ma_bn)
+                    patient_ready[ma_bn] = max(patient_ready.get(ma_bn, datetime.min), t_finish)
+            else:
+                y_lenh_list = [t.strip() for t in bn_obj['Y_Lenh'].split(",") if t.strip()]
+                if b_task not in y_lenh_list: continue
+                if l_tg == "Thực hiện":
+                    scheduled_thuthuat.append((ma_bn, b_task))
+            
+            schedule_records.append(row.to_dict())
+            
+            if l_tg == "Thực hiện":
+                if b_task == "Khám bệnh":
+                    patient_busy[ma_bn].append((t_start, t_finish + timedelta(minutes=2)))
+                    if nv in staff_active_busy: staff_active_busy[nv].append((t_start, t_finish + timedelta(minutes=2)))
+                else:
+                    tt_info = tt_dict.get(ma_thu_thuat_dict.get(b_task))
+                    if tt_info:
+                        thao_tac = int(tt_info['Thoi_Gian_Thao_Tac_Phut'])
+                        cho = int(tt_info['Thoi_Gian_Cho_Phut'])
+                        end_total = t_start + timedelta(minutes=thao_tac + cho)
+                        
+                        patient_busy[ma_bn].append((t_start, end_total + timedelta(minutes=2)))
+                        if nv in staff_active_busy: staff_active_busy[nv].append((t_start, t_finish + timedelta(minutes=2)))
+                        
+                        may_moc = str(tt_info['Yeu_Cau_May_Moc']).strip()
+                        if may_moc not in machine_busy: may_moc = 'Không'
+                        for idx, m_intervals in machine_busy[may_moc].items():
+                            if not get_conflict_end(m_intervals, t_start, end_total):
+                                m_intervals.append((t_start, end_total))
+                                break
+
     # ================== GIAI ĐOẠN 1: XẾP LỊCH KHÁM BỆNH ==================
     bns_fixed = []
     bns_auto = []
     for bn in st.session_state.bn_list:
+        if bn['Ma_BN'] in scheduled_khambenh:
+            continue
         gk_str = str(bn.get('Gio_Kham', '')).strip()
         if gk_str and gk_str.lower() not in ['nan', 'none']:
             try: 
@@ -547,7 +602,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
 
     # ================== GIAI ĐOẠN 2: XẾP LỊCH THỦ THUẬT QUÉT NGANG ==================
     jobs = []
-    tt_dict = df_thongso.set_index('Ma_Thu_Thuat').to_dict('index')
+    # tt_dict = df_thongso.set_index('Ma_Thu_Thuat').to_dict('index') # Already defined above
     for bn in st.session_state.bn_list:
         ma_bn = bn['Ma_BN']
         if patient_ready.get(ma_bn) == limit_end_of_day: 
@@ -560,6 +615,9 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             except: pass
 
         for tt in [t.strip() for t in bn['Y_Lenh'].split(",") if t.strip()]:
+            if (ma_bn, tt) in scheduled_thuthuat:
+                scheduled_thuthuat.remove((ma_bn, tt))
+                continue
             jobs.append({'Ma_BN': ma_bn, 'Ma_Thu_Thuat': ma_thu_thuat_dict[tt], 'Ten_Thu_Thuat': tt, 'Discharge_Time': discharge_dt, 'Created_At': bn.get('Created_At', 0)})
 
     while jobs:
