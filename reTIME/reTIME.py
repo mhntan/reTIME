@@ -6,6 +6,7 @@ import io
 import os
 import json
 import re
+import unicodedata
 import streamlit.components.v1 as components
 
 # ==========================================
@@ -72,10 +73,44 @@ def cleanup_old_files():
     except: pass
 cleanup_old_files()
 
+WEEKDAY_VN = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ nhật"]
+
+def to_bool(v, default=True):
+    if isinstance(v, bool): return v
+    if v is None: return default
+    try:
+        if pd.isna(v): return default
+    except (TypeError, ValueError): pass
+    s = str(v).strip().lower()
+    if s in ('true', '1', '1.0', 'có', 'co', 'x', 'yes', 'y', '✔', '✓', '✅'): return True
+    if s in ('false', '0', '0.0', 'không', 'khong', 'no', 'n', '✘', '✗', '❌'): return False
+    return default
+
+def clean_str(v):
+    if v is None: return ""
+    try:
+        if pd.isna(v): return ""
+    except (TypeError, ValueError): pass
+    s = str(v).strip()
+    return "" if s.lower() in ('nan', 'none', 'nat') else s
+
+def norm_key(s):
+    # Chuẩn hoá chuỗi để so khớp: bỏ dấu, bỏ khoảng trắng/ký tự đặc biệt, chữ thường
+    s = unicodedata.normalize('NFD', clean_str(s).replace('đ', 'd').replace('Đ', 'D'))
+    s = ''.join(c for c in s if unicodedata.category(c) != 'Mn')
+    return re.sub(r'[^a-z0-9]', '', s.lower())
+
+def gen_ma_bn(existing_codes):
+    prefix = f"BN{datetime.now().strftime('%d%m')}-"
+    n = 1
+    while f"{prefix}{n:02d}" in existing_codes: n += 1
+    return f"{prefix}{n:02d}"
+
 def sanitize_bn_list(bn_list):
     for bn in bn_list:
-        if 'Gio_Ra_Vien' not in bn: bn['Gio_Ra_Vien'] = ""
-        if 'Gio_Kham' not in bn: bn['Gio_Kham'] = ""
+        bn['Gio_Ra_Vien'] = clean_str(bn.get('Gio_Ra_Vien', ""))
+        bn['Gio_Kham'] = clean_str(bn.get('Gio_Kham', ""))
+        bn['Kham_Benh'] = to_bool(bn.get('Kham_Benh', True), default=True)
     return bn_list
 
 USE_GSHEETS = False
@@ -151,7 +186,7 @@ def save_ns_data_db(df, date_str):
 def save_bn_data_db(bn_list, date_str):
     with open(f"bn_{date_str}.json", 'w', encoding='utf-8') as f: json.dump(bn_list, f, ensure_ascii=False, indent=2)
     df = pd.DataFrame(bn_list)
-    if df.empty: df = pd.DataFrame(columns=["Ma_BN", "Ten_BN", "BS_Kham", "Y_Lenh", "Created_At", "Gio_Ra_Vien", "Gio_Kham"])
+    if df.empty: df = pd.DataFrame(columns=["Ma_BN", "Ten_BN", "BS_Kham", "Y_Lenh", "Created_At", "Gio_Ra_Vien", "Gio_Kham", "Kham_Benh"])
     update_gsheets_safe("BenhNhan", df, date_str)
 
 def save_sched_data_db(df, date_str):
@@ -159,11 +194,16 @@ def save_sched_data_db(df, date_str):
     update_gsheets_safe("LichTrinh", df, date_str)
 
 def parse_time_input(time_str):
+    # Ô giờ trong Excel có thể được đọc thành kiểu time/datetime
+    if hasattr(time_str, 'strftime') and not isinstance(time_str, str):
+        try: return time_str.strftime("%H:%M")
+        except: return ""
     if pd.isna(time_str): return ""
     time_str = str(time_str).strip().replace(';', ':')
     if not time_str or time_str.lower() in ['nan', 'none']: return ""
     if re.match(r'^\d{4}$', time_str): time_str = f"{time_str[:2]}:{time_str[2:]}"
     elif re.match(r'^\d{3}$', time_str): time_str = f"0{time_str[0]}:{time_str[1:]}"
+    elif re.match(r'^\d{1,2}:\d{2}:\d{2}$', time_str): time_str = time_str[:-3]
     try: 
         datetime.strptime(time_str, "%H:%M")
         return time_str
@@ -238,6 +278,8 @@ if 'selected_date' not in st.session_state or st.session_state.selected_date != 
                 fb_db = get_fallback_from_db("BenhNhan", selected_date)
                 if fb_db is not None: st.session_state.bn_list = sanitize_bn_list(fb_db.to_dict('records'))
                 else: st.session_state.bn_list = []
+            # Danh sách mang sang từ ngày trước: T2–T6 mặc định có khám, T7–CN mặc định không khám
+            for bn in st.session_state.bn_list: bn['Kham_Benh'] = selected_date.weekday() < 5
         
     if os.path.exists(f"sched_{date_str}.json"):
         st.session_state.df_schedule = pd.read_json(f"sched_{date_str}.json", orient='records')
@@ -333,6 +375,25 @@ st.session_state.bn_list.sort(key=lambda x: x.get('Created_At', 0))
 
 danh_sach_thu_thuat = df_thongso['Ten_Thu_Thuat'].tolist()
 ma_thu_thuat_dict = dict(zip(df_thongso['Ten_Thu_Thuat'], df_thongso['Ma_Thu_Thuat']))
+tt_lookup = {norm_key(t): t for t in danh_sach_thu_thuat}
+tt_role = dict(zip(df_thongso['Ten_Thu_Thuat'], df_thongso['Nguoi_Phu_Trach']))
+bs_all_codes = [c for c in st.session_state.ns_data['Ma_Nhan_Vien'] if str(c).startswith('bs-')]
+is_weekend = selected_date.weekday() >= 5
+KHAM_LABEL = "🩺 Khám bệnh (xếp 5 phút khám ban đầu)"
+
+def build_bn_export_df(bn_list):
+    rows = []
+    for i, bn in enumerate(bn_list, 1):
+        rows.append({
+            'STT': i, 'Mã BN': bn['Ma_BN'], 'Tên Bệnh Nhân': bn['Ten_BN'],
+            'Bác sĩ phụ trách': ten_nv_dict.get(bn['BS_Kham'], bn['BS_Kham']), 'Mã BS': bn['BS_Kham'],
+            'Thủ thuật (Y lệnh)': bn['Y_Lenh'], 'Khám bệnh': 'Có' if bn.get('Kham_Benh', True) else 'Không',
+            'Giờ khám': bn.get('Gio_Kham', ''), 'Giờ ra viện': bn.get('Gio_Ra_Vien', '')
+        })
+    return pd.DataFrame(rows, columns=['STT', 'Mã BN', 'Tên Bệnh Nhân', 'Bác sĩ phụ trách', 'Mã BS', 'Thủ thuật (Y lệnh)', 'Khám bệnh', 'Giờ khám', 'Giờ ra viện'])
+
+if 'import_msg' in st.session_state:
+    st.success(st.session_state.pop('import_msg'))
 
 col_form, col_table = st.columns([1, 1.5])
 with col_form:
@@ -346,20 +407,22 @@ with col_form:
             with col_b2: gio_ra_vien = st.text_input("Giờ ra viện (nếu có)")
             
             bs_kham = st.selectbox("Bác sĩ phụ trách", options=bs_list, format_func=lambda x: ten_nv_dict.get(x, x))
+            kham_benh = st.checkbox(KHAM_LABEL, value=not is_weekend,
+                                    help="Bỏ chọn nếu BN chỉ làm thủ thuật theo y lệnh đã có (VD: Thứ 7, Chủ nhật).")
+            if is_weekend: st.caption(f"ℹ️ {WEEKDAY_VN[selected_date.weekday()]}: mặc định KHÔNG khám, chỉ làm thủ thuật theo y lệnh cũ.")
             y_lenh_chon = st.multiselect("Chỉ định Thủ thuật", options=danh_sach_thu_thuat)
             
             if st.form_submit_button("Lập Hồ Sơ", type="primary", use_container_width=True):
                 if ten_bn.strip() == "": st.error("Vui lòng nhập tên Bệnh nhân!")
                 elif not y_lenh_chon: st.error("Vui lòng chọn ít nhất 1 thủ thuật!")
                 else:
-                    today_prefix = datetime.now().strftime("%d%m")
-                    count_today = sum(1 for b in st.session_state.bn_list if str(b['Ma_BN']).startswith(f"BN{today_prefix}"))
-                    ma_bn = f"BN{today_prefix}-{count_today+1:02d}"
+                    ma_bn = gen_ma_bn({str(b['Ma_BN']) for b in st.session_state.bn_list})
                     st.session_state.bn_list.append({
                         "Ma_BN": ma_bn, "Ten_BN": ten_bn, "BS_Kham": bs_kham, 
                         "Y_Lenh": ", ".join(y_lenh_chon), "Created_At": datetime.now().timestamp(),
                         "Gio_Ra_Vien": parse_time_input(gio_ra_vien),
-                        "Gio_Kham": parse_time_input(gio_kham)
+                        "Gio_Kham": parse_time_input(gio_kham),
+                        "Kham_Benh": bool(kham_benh)
                     })
                     save_bn_data_db(st.session_state.bn_list, date_str)
                     st.success(f"Đã lập hồ sơ: {ten_bn} (Mã: {ma_bn})")
@@ -372,7 +435,24 @@ with col_table:
             df_hienthi = pd.DataFrame(st.session_state.bn_list)
             df_hienthi['BS_Kham'] = df_hienthi['BS_Kham'].map(lambda x: ten_nv_dict.get(x, x))
             df_hienthi.insert(0, 'STT', range(1, len(df_hienthi) + 1))
-            st.dataframe(df_hienthi[['STT', 'Ma_BN', 'Ten_BN', 'Gio_Kham', 'Gio_Ra_Vien', 'BS_Kham', 'Y_Lenh']].rename(columns={'Gio_Ra_Vien': 'Hẹn về', 'Gio_Kham': 'Giờ khám'}), hide_index=True, use_container_width=True, height=200)
+            st.dataframe(df_hienthi[['STT', 'Ma_BN', 'Ten_BN', 'Kham_Benh', 'Gio_Kham', 'Gio_Ra_Vien', 'BS_Kham', 'Y_Lenh']].rename(columns={'Gio_Ra_Vien': 'Hẹn về', 'Gio_Kham': 'Giờ khám'}),
+                         column_config={"Kham_Benh": st.column_config.CheckboxColumn("Khám")},
+                         hide_index=True, use_container_width=True, height=200)
+            
+            n_kham = sum(1 for b in st.session_state.bn_list if b.get('Kham_Benh', True))
+            st.caption(f"🩺 Có khám: **{n_kham}** BN · Chỉ làm thủ thuật: **{len(st.session_state.bn_list) - n_kham}** BN")
+            col_k1, col_k2, col_k3 = st.columns(3)
+            if col_k1.button("🩺 Tất cả CÓ khám", use_container_width=True):
+                for b in st.session_state.bn_list: b['Kham_Benh'] = True
+                save_bn_data_db(st.session_state.bn_list, date_str)
+                st.rerun()
+            if col_k2.button("🚫 Tất cả KHÔNG khám", use_container_width=True):
+                for b in st.session_state.bn_list: b['Kham_Benh'] = False
+                save_bn_data_db(st.session_state.bn_list, date_str)
+                st.rerun()
+            buf_bn = io.BytesIO()
+            with pd.ExcelWriter(buf_bn, engine='openpyxl') as writer: build_bn_export_df(st.session_state.bn_list).to_excel(writer, index=False, sheet_name='Danh_Sach_BN')
+            col_k3.download_button("📤 Xuất DS BN", data=buf_bn.getvalue(), file_name=f"DanhSach_BN_{selected_date.strftime('%Y%m%d')}.xlsx", use_container_width=True)
             
             with st.expander("✏️ Điều chỉnh Y Lệnh hoặc Cho Ra Viện"):
                 edit_idx = st.selectbox("🔍 Chọn Bệnh nhân:", options=range(len(st.session_state.bn_list)), format_func=lambda i: f"{st.session_state.bn_list[i]['Ma_BN']} - {st.session_state.bn_list[i]['Ten_BN']}")
@@ -387,6 +467,7 @@ with col_table:
                     edit_gk = st.text_input("Giờ khám mới:", value=selected_bn.get('Gio_Kham', ''))
                     edit_rv = st.text_input("Giờ ra viện mới:", value=selected_bn.get('Gio_Ra_Vien', ''))
                 
+                edit_kb = st.checkbox(KHAM_LABEL, value=selected_bn.get('Kham_Benh', True), key=f"edit_kb_{selected_bn['Ma_BN']}")
                 edit_yl = st.multiselect("Thêm/Bớt Thủ thuật:", options=danh_sach_thu_thuat, default=current_yl)
                 
                 col_btn1, col_btn2 = st.columns(2)
@@ -396,6 +477,7 @@ with col_table:
                     st.session_state.bn_list[edit_idx]['Y_Lenh'] = ", ".join(edit_yl)
                     st.session_state.bn_list[edit_idx]['Gio_Kham'] = parse_time_input(edit_gk)
                     st.session_state.bn_list[edit_idx]['Gio_Ra_Vien'] = parse_time_input(edit_rv)
+                    st.session_state.bn_list[edit_idx]['Kham_Benh'] = bool(edit_kb)
                     save_bn_data_db(st.session_state.bn_list, date_str)
                     st.rerun()
                 if col_btn2.button("🏥 Ra viện", type="secondary", use_container_width=True):
@@ -403,6 +485,217 @@ with col_table:
                     save_bn_data_db(st.session_state.bn_list, date_str)
                     st.rerun()
         else: st.info("Khoa hiện không có bệnh nhân.")
+
+# ---------- NHẬP DANH SÁCH BN TỪ NGÀY KHÁC / FILE EXCEL ----------
+def resolve_bs(values):
+    # Nhận mã BS hoặc tên BS (có/không dấu), trả về mã BS trong danh sách nhân sự hiện tại
+    if not isinstance(values, (list, tuple)): values = [values]
+    for value in values:
+        v = clean_str(value).replace(" (Theo dõi)", "")
+        if not v: continue
+        if v in bs_all_codes: return v
+        k = norm_key(v)
+        for code in bs_all_codes:
+            if norm_key(ten_nv_dict.get(code, '')) == k or norm_key(code) == k: return code
+    return None
+
+def resolve_y_lenh(value):
+    parts = value if isinstance(value, (list, tuple)) else re.split(r'[,;\n]+', clean_str(value))
+    found, unknown = [], []
+    for p in parts:
+        p = clean_str(p)
+        if not p: continue
+        tt = tt_lookup.get(norm_key(p))
+        if tt:
+            if tt not in found: found.append(tt)
+        else: unknown.append(p)
+    return found, unknown
+
+def list_saved_bn_dates():
+    result = {}
+    for f in os.listdir():
+        m = re.match(r'^bn_(\d{4}-\d{2}-\d{2})\.json$', f)
+        if m and m.group(1) != date_str:
+            try:
+                with open(f, 'r', encoding='utf-8') as fh: n = len(json.load(fh))
+                if n > 0: result[m.group(1)] = n
+            except: pass
+    if USE_GSHEETS:
+        try:
+            df_all = conn.read(worksheet="BenhNhan", ttl=0)
+            if not df_all.empty and 'Date' in df_all.columns:
+                for d, n in df_all.dropna(subset=['Date']).groupby('Date').size().items():
+                    d = str(d)[:10]
+                    if d != date_str and d not in result: result[d] = int(n)
+        except: pass
+    return dict(sorted(result.items(), reverse=True))
+
+def load_bn_of_date(d):
+    p = f"bn_{d}.json"
+    if os.path.exists(p):
+        with open(p, 'r', encoding='utf-8') as fh: return sanitize_bn_list(json.load(fh))
+    db = get_data_from_db("BenhNhan", d)
+    return sanitize_bn_list(db.to_dict('records')) if db is not None else []
+
+def parse_import_excel(uploaded):
+    # Hỗ trợ: (1) file "Xuất DS BN" (sheet Danh_Sach_BN), (2) file Lịch phân công đã xuất, (3) danh sách tự soạn
+    xls = pd.ExcelFile(uploaded)
+    sheets = xls.sheet_names
+    order = (['Danh_Sach_BN'] if 'Danh_Sach_BN' in sheets else []) + [s for s in sheets if s != 'Danh_Sach_BN']
+    for sh in order:
+        df = pd.read_excel(xls, sheet_name=sh)
+        if df.empty: continue
+        cols = {norm_key(c): c for c in df.columns}
+        def pick(*aliases):
+            for a in aliases:
+                if a in cols: return cols[a]
+            return None
+        c_ma = pick('mabn', 'mabenhnhan')
+        c_ten = pick('tenbenhnhan', 'tenbn', 'hoten', 'hovaten', 'benhnhan')
+        c_tt = pick('thuthuatylenh', 'ylenh', 'chidinhthuthuat', 'chidinh', 'thuthuat')
+        c_nv = pick('nhanvien')
+        c_start = pick('batdau')
+        if c_ten is None or c_tt is None: continue
+        
+        if c_nv and c_start:  # File LỊCH PHÂN CÔNG -> gom lại theo từng bệnh nhân
+            groups = {}
+            for _, row in df.iterrows():
+                ten = clean_str(row[c_ten]); ma = clean_str(row[c_ma]) if c_ma else ''
+                key = ma or ten
+                if not key: continue
+                g = groups.setdefault(key, {'Ma_BN': ma, 'Ten_BN': ten, 'tasks': [], 'bs_kham': None, 'bs_tt': None})
+                task = clean_str(row[c_tt]); nv = clean_str(row[c_nv]).replace(" (Theo dõi)", "")
+                if not task or task.endswith(" - Lưu"): continue
+                if norm_key(task) == 'khambenh':
+                    g['bs_kham'] = nv; continue
+                if task not in g['tasks']: g['tasks'].append(task)
+                tt_name = tt_lookup.get(norm_key(task))
+                if tt_name and tt_role.get(tt_name) == 'BS' and not g['bs_tt']: g['bs_tt'] = nv
+            raw = []
+            for _, g in sorted(groups.items()):
+                tasks = sorted(g['tasks'], key=lambda t: danh_sach_thu_thuat.index(tt_lookup[norm_key(t)]) if norm_key(t) in tt_lookup else 999)
+                raw.append({'Ma_BN': g['Ma_BN'], 'Ten_BN': g['Ten_BN'], 'BS_Kham': [g['bs_kham'], g['bs_tt']], 'Y_Lenh': tasks})
+            return raw, f"Lịch phân công (sheet '{sh}')"
+        
+        c_bs_ma = pick('mabs', 'bskham', 'mabacsi')
+        c_bs_ten = pick('bacsiphutrach', 'bacsi', 'bacsikham', 'bs')
+        c_gk = pick('giokham')
+        c_rv = pick('gioravien', 'henve', 'giohenve')
+        raw = []
+        for _, row in df.iterrows():
+            raw.append({
+                'Ma_BN': row[c_ma] if c_ma else '', 'Ten_BN': row[c_ten],
+                'BS_Kham': [row[c_bs_ma] if c_bs_ma else None, row[c_bs_ten] if c_bs_ten else None],
+                'Y_Lenh': row[c_tt],
+                'Gio_Kham': row[c_gk] if c_gk else '', 'Gio_Ra_Vien': row[c_rv] if c_rv else ''
+            })
+        return raw, f"Danh sách bệnh nhân (sheet '{sh}')"
+    return [], None
+
+def build_import_candidates(raw_list, keep_times):
+    rows, warns = [], []
+    for r in raw_list:
+        ten = clean_str(r.get('Ten_BN'))
+        if not ten: continue
+        yl, unknown = resolve_y_lenh(r.get('Y_Lenh', ''))
+        if unknown: warns.append(f"**{ten}**: bỏ qua thủ thuật không có trong danh mục: {', '.join(unknown)}")
+        if not yl: warns.append(f"**{ten}**: không có thủ thuật hợp lệ → không được chọn.")
+        bs = resolve_bs(r.get('BS_Kham')) or bs_list[0]
+        rows.append({
+            'Chon': bool(yl), 'Ma_BN': clean_str(r.get('Ma_BN')), 'Ten_BN': ten,
+            'BS_Ten': ten_nv_dict.get(bs, bs), 'Y_Lenh': ", ".join(yl), 'Kham_Benh': not is_weekend,
+            'Gio_Kham': parse_time_input(r.get('Gio_Kham', '')) if keep_times else "",
+            'Gio_Ra_Vien': parse_time_input(r.get('Gio_Ra_Vien', '')) if keep_times else "",
+        })
+    return pd.DataFrame(rows, columns=['Chon', 'Ma_BN', 'Ten_BN', 'BS_Ten', 'Y_Lenh', 'Kham_Benh', 'Gio_Kham', 'Gio_Ra_Vien']), warns
+
+IMPORT_MODE_ADD = "➕ Thêm vào danh sách hiện tại"
+IMPORT_MODE_REPLACE = "♻️ Thay thế toàn bộ danh sách hiện tại"
+
+def do_import(df_sel, mode, skip_dup_name):
+    bs_name_to_code = {ten_nv_dict.get(c, c): c for c in bs_all_codes}
+    base = [] if mode == IMPORT_MODE_REPLACE else list(st.session_state.bn_list)
+    names = {norm_key(b['Ten_BN']) for b in base}
+    codes = {str(b['Ma_BN']) for b in base}
+    now_ts = datetime.now().timestamp()
+    added, dups = 0, []
+    for _, r in df_sel.iterrows():
+        ten, yl = clean_str(r['Ten_BN']), clean_str(r['Y_Lenh'])
+        if not ten or not yl: continue
+        ma = clean_str(r['Ma_BN'])
+        if (ma and ma in codes) or (skip_dup_name and norm_key(ten) in names):
+            dups.append(ten); continue
+        if not ma: ma = gen_ma_bn(codes)
+        base.append({
+            "Ma_BN": ma, "Ten_BN": ten, "BS_Kham": bs_name_to_code.get(r['BS_Ten'], bs_list[0]),
+            "Y_Lenh": yl, "Created_At": now_ts + added * 0.001,
+            "Gio_Ra_Vien": parse_time_input(r['Gio_Ra_Vien']), "Gio_Kham": parse_time_input(r['Gio_Kham']),
+            "Kham_Benh": to_bool(r['Kham_Benh'], default=not is_weekend)
+        })
+        names.add(norm_key(ten)); codes.add(ma); added += 1
+    st.session_state.bn_list = base
+    save_bn_data_db(base, date_str)
+    st.session_state.import_open = False
+    msg = f"✅ Đã nhập {added} bệnh nhân vào ngày {selected_date.strftime('%d/%m/%Y')}."
+    if dups: msg += f" Bỏ qua {len(dups)} BN đã có sẵn: {', '.join(dups)}."
+    st.session_state.import_msg = msg
+
+if st.toggle("📥 Nhập danh sách bệnh nhân từ ngày khác / file Excel", key="import_open"):
+    with st.container(border=True):
+        src = st.radio("Nguồn dữ liệu:", ["📅 Chọn từ ngày đã lưu trong app", "📄 Từ file Excel"], horizontal=True, key="import_src")
+        keep_times = st.checkbox("Giữ lại Giờ khám / Giờ ra viện của ngày cũ", value=False, key="import_keep_times")
+        raw_list, src_key, warns = [], None, []
+        
+        if src.startswith("📅"):
+            saved = list_saved_bn_dates()
+            if not saved:
+                st.info("Chưa có ngày nào được lưu (app chỉ giữ dữ liệu 7 ngày gần nhất). Hãy dùng tuỳ chọn 'Từ file Excel'.")
+            else:
+                d_sel = st.selectbox("Chọn ngày nguồn:", options=list(saved.keys()), key="import_src_date",
+                                     format_func=lambda d: f"{WEEKDAY_VN[datetime.strptime(d, '%Y-%m-%d').weekday()]}, {datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')} — {saved[d]} BN")
+                raw_list = load_bn_of_date(d_sel)
+                for r in raw_list: r['BS_Kham'] = [r.get('BS_Kham')]
+                src_key = f"d{d_sel}"
+        else:
+            up = st.file_uploader("Chọn file Excel (file 'Xuất DS BN', file Lịch phân công đã tải xuống, hoặc danh sách tự soạn có cột 'Tên Bệnh Nhân' và 'Thủ thuật')", type=['xlsx'], key="import_file")
+            if up is not None:
+                try:
+                    raw_list, fmt = parse_import_excel(up)
+                    if fmt: st.caption(f"📄 Nhận dạng file: **{fmt}**")
+                    else: st.error("Không tìm thấy cột 'Tên Bệnh Nhân' và 'Thủ thuật' trong file.")
+                except Exception as e:
+                    st.error(f"Không đọc được file Excel: {e}")
+                src_key = f"f{up.name}_{up.size}"
+        
+        if raw_list:
+            df_cand, warns = build_import_candidates(raw_list, keep_times)
+            if warns:
+                with st.expander(f"⚠️ {len(warns)} cảnh báo khi đọc dữ liệu"):
+                    for w in warns: st.markdown(f"- {w}")
+            st.caption(f"Đánh dấu/bỏ chọn BN cần nhập. Cột 'Khám bệnh' đã đặt sẵn theo {WEEKDAY_VN[selected_date.weekday()]} "
+                       f"({'không khám' if is_weekend else 'có khám'}), có thể sửa từng dòng. Y lệnh có thể chỉnh lại sau khi nhập.")
+            edited_cand = st.data_editor(
+                df_cand, key=f"import_editor_{src_key}_{keep_times}_{date_str}", hide_index=True, use_container_width=True, num_rows="fixed",
+                column_config={
+                    "Chon": st.column_config.CheckboxColumn("Chọn"),
+                    "Ma_BN": st.column_config.TextColumn("Mã BN", disabled=True),
+                    "Ten_BN": st.column_config.TextColumn("Tên BN"),
+                    "BS_Ten": st.column_config.SelectboxColumn("BS phụ trách", options=[ten_nv_dict.get(c, c) for c in bs_all_codes], required=True),
+                    "Y_Lenh": st.column_config.TextColumn("Thủ thuật", disabled=True),
+                    "Kham_Benh": st.column_config.CheckboxColumn("Khám bệnh"),
+                    "Gio_Kham": st.column_config.TextColumn("Giờ khám"),
+                    "Gio_Ra_Vien": st.column_config.TextColumn("Giờ ra viện"),
+                })
+            df_sel = edited_cand[edited_cand['Chon'] == True]
+            
+            col_i1, col_i2 = st.columns([2, 1])
+            with col_i1:
+                mode = st.radio("Cách nhập:", [IMPORT_MODE_ADD, IMPORT_MODE_REPLACE], horizontal=True, key="import_mode")
+                skip_dup = st.checkbox("Bỏ qua BN trùng tên với danh sách hiện tại", value=True, key="import_skip_dup")
+            with col_i2:
+                st.write("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                st.button(f"✅ Nhập {len(df_sel)} BN đã chọn", type="primary", use_container_width=True,
+                          disabled=len(df_sel) == 0, on_click=do_import, args=(df_sel, mode, skip_dup))
 
 # ==========================================
 # KHU VỰC 3: THUẬT TOÁN QUÉT KHE THỜI GIAN (INTERVAL SWEEPING)
@@ -486,6 +779,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             if not bn_obj: continue
             
             if b_task == "Khám bệnh":
+                if not bn_obj.get('Kham_Benh', True): continue  # BN đã được bỏ chọn khám -> huỷ ca khám cũ
                 if l_tg == "Thực hiện":
                     scheduled_khambenh.add(ma_bn)
                     patient_ready[ma_bn] = max(patient_ready.get(ma_bn, datetime.min), t_finish)
@@ -525,6 +819,13 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
         if bn['Ma_BN'] in scheduled_khambenh:
             continue
         gk_str = str(bn.get('Gio_Kham', '')).strip()
+        if not bn.get('Kham_Benh', True):
+            # BN KHÔNG khám (VD: T7, CN): bỏ qua 5 phút khám, làm thủ thuật luôn theo y lệnh cũ.
+            # Nếu có nhập "Giờ khám" thì xem như giờ BN có mặt -> thủ thuật bắt đầu từ giờ đó.
+            if gk_str and gk_str.lower() not in ['nan', 'none']:
+                try: patient_ready[bn['Ma_BN']] = datetime.strptime(f"{date_str} {gk_str}", "%Y-%m-%d %H:%M")
+                except: pass
+            continue
         if gk_str and gk_str.lower() not in ['nan', 'none']:
             try: 
                 start_t = datetime.strptime(f"{date_str} {gk_str}", "%Y-%m-%d %H:%M")
@@ -744,7 +1045,9 @@ if 'df_schedule' in st.session_state:
     df_export.sort_values(by=['Nhân Viên', 'Bắt Đầu'], inplace=True)
 
     buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer: df_export.to_excel(writer, index=False, sheet_name='Lich_Trinh')
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df_export.to_excel(writer, index=False, sheet_name='Lich_Trinh')
+        build_bn_export_df(st.session_state.bn_list).to_excel(writer, index=False, sheet_name='Danh_Sach_BN')
     st.download_button("📥 TẢI XUỐNG FILE EXCEL LỊCH PHÂN CÔNG", data=buffer.getvalue(), file_name=f"Lich_YHCT_{selected_date.strftime('%Y%m%d')}.xlsx", type="primary")
     st.divider()
 
