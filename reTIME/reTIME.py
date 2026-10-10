@@ -737,6 +737,8 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
     patient_busy = {bn: [] for bn in all_bn}
     patient_ready = {} # Đánh dấu thời điểm Bệnh nhân khám xong để chạy thủ thuật
     staff_active_busy = {s: [] for s in (bs_list + ktv_list)}
+    staff_load = {}        # Tổng phút thao tác đã phân cho mỗi nhân viên (cân bằng tải KTV)
+    staff_task_count = {}  # Số thủ thuật đã phân cho mỗi nhân viên
     
     machine_capacities = {'Máy điện xung': 4, 'Máy từ trường': 1, 'Máy xoa bóp': 2, 'Máy kéo dãn': 1, 'Máy kéo': 1, 'Máy siêu âm': 2, 'Máy Laser': 1, 'Máy xung kích': 1, 'Máy hồng ngoại': 3, 'Máy Laser NM': 2, 'Máy Parafin': 2, 'Máy sóng ngắn': 1, 'Không': 100, 'Không dùng máy': 100}
     machine_busy = {}
@@ -793,7 +795,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             
             if l_tg == "Thực hiện":
                 if b_task == "Khám bệnh":
-                    patient_busy[ma_bn].append((t_start, t_finish + timedelta(minutes=2)))
+                    patient_busy[ma_bn].append((t_start, t_finish))
                     if nv in staff_active_busy: staff_active_busy[nv].append((t_start, t_finish + timedelta(minutes=2)))
                 else:
                     tt_info = tt_dict.get(ma_thu_thuat_dict.get(b_task))
@@ -804,6 +806,8 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
                         
                         patient_busy[ma_bn].append((t_start, end_total + timedelta(minutes=2)))
                         if nv in staff_active_busy: staff_active_busy[nv].append((t_start, t_finish + timedelta(minutes=2)))
+                        staff_load[nv] = staff_load.get(nv, 0) + thao_tac
+                        staff_task_count[nv] = staff_task_count.get(nv, 0) + 1
                         
                         may_moc = str(tt_info['Yeu_Cau_May_Moc']).strip()
                         if may_moc not in machine_busy: may_moc = 'Không'
@@ -859,9 +863,9 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             break
             
         if scheduled:
-            patient_busy[ma_bn].append((t, end_t + timedelta(minutes=2)))
+            patient_busy[ma_bn].append((t, end_t))
             staff_active_busy[bs].append((t, end_t + timedelta(minutes=2)))
-            patient_ready[ma_bn] = end_t + timedelta(minutes=2) # Lưu giờ BS khám xong
+            patient_ready[ma_bn] = end_t # Thủ thuật bắt đầu ngay sau 5 phút khám (VD 07:30 khám -> 07:35 thủ thuật)
             schedule_records.append(dict(Task="Khám bệnh", Base_Task="Khám bệnh", Loai_Thoi_Gian="Thực hiện", Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=bs, Ten_NV_Full=ten_nv_dict.get(bs, bs), Start=t, Finish=end_t))
         else:
             unscheduled_logs.append(f"❌ **{ten_bn_dict[ma_bn]}**: Không kịp xếp 'Khám bệnh' do Bác sĩ {ten_nv_dict.get(bs, bs)} đã quá tải/hết giờ ca {staff_shifts[bs]}.")
@@ -893,9 +897,9 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             break
             
         if scheduled:
-            patient_busy[ma_bn].append((t, end_t + timedelta(minutes=2)))
+            patient_busy[ma_bn].append((t, end_t))
             staff_active_busy[bs].append((t, end_t + timedelta(minutes=2)))
-            patient_ready[ma_bn] = end_t + timedelta(minutes=2) # Lưu giờ BS khám xong
+            patient_ready[ma_bn] = end_t # Thủ thuật bắt đầu ngay sau 5 phút khám
             schedule_records.append(dict(Task="Khám bệnh", Base_Task="Khám bệnh", Loai_Thoi_Gian="Thực hiện", Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=bs, Ten_NV_Full=ten_nv_dict.get(bs, bs), Start=t, Finish=end_t))
         else:
             unscheduled_logs.append(f"❌ **{ten_bn_dict[ma_bn]}**: Không kịp xếp 'Khám bệnh' do Bác sĩ {ten_nv_dict.get(bs, bs)} đã quá tải/hết giờ ca {staff_shifts[bs]}.")
@@ -969,7 +973,11 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
                 for s in potential_staff:
                     if not check_shift(t, staff_shifts[s], limit_morning, start_afternoon): continue
                     c_e = get_conflict_end(staff_active_busy[s], t, end_active + timedelta(minutes=2))
-                    if not c_e: staff_assigned = s; break
+                    if not c_e:
+                        # Cân bằng tải: chọn nhân viên rảnh có tổng khối lượng việc ít nhất
+                        if staff_assigned is None or (staff_load.get(s, 0), staff_task_count.get(s, 0)) < (staff_load.get(staff_assigned, 0), staff_task_count.get(staff_assigned, 0)):
+                            staff_assigned = s
+                        continue
                     if c_e < min_s_c: min_s_c = c_e
                     
                 if staff_assigned is None:
@@ -1013,6 +1021,8 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             
         patient_busy[ma_bn].append((best_start, end_total + timedelta(minutes=2)))
         staff_active_busy[best_staff].append((best_start, end_active + timedelta(minutes=2)))
+        staff_load[best_staff] = staff_load.get(best_staff, 0) + thao_tac
+        staff_task_count[best_staff] = staff_task_count.get(best_staff, 0) + 1
         machine_busy[may_moc][best_machine_idx].append((best_start, end_total))
 
     st.session_state.unscheduled_logs = unscheduled_logs
