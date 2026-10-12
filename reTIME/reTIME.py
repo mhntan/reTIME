@@ -47,6 +47,30 @@ st.markdown("""
     button[kind="primary"]:hover { background-color: #1E8449 !important; border-color: #1E8449 !important; }
     button[kind="secondary"] { background-color: #F39C12 !important; border-color: #F39C12 !important; color: white !important; font-weight: bold;}
     button[kind="secondary"]:hover { background-color: #E67E22 !important; border-color: #E67E22 !important; }
+    
+    /* Ô chọn ngày to và nổi bật */
+    div[data-testid="stDateInput"] {
+        background: linear-gradient(135deg, #EBF5FB 0%, #D4E6F1 100%);
+        padding: 10px 16px;
+        border-radius: 12px;
+        border: 2px solid #2980B9 !important;
+        box-shadow: 0 4px 12px rgba(41, 128, 185, 0.25);
+    }
+    div[data-testid="stDateInput"] label p {
+        font-size: 1.15rem !important;
+        font-weight: 800 !important;
+        color: #1B4F72 !important;
+        margin-bottom: 4px !important;
+    }
+    div[data-testid="stDateInput"] input {
+        font-size: 1.25rem !important;
+        font-weight: 700 !important;
+        color: #154360 !important;
+        background-color: #FFFFFF !important;
+        border: 1.5px solid #5DADE2 !important;
+        border-radius: 8px !important;
+        height: 46px !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -222,20 +246,22 @@ except Exception as e: st.error(f"⚠️ Không tìm thấy file 'data.xlsx'. L�
 # ==========================================
 # THANH CÔNG CỤ CHỌN NGÀY & LÀM MỚI 
 # ==========================================
-col_date, col_blank, col_btn = st.columns([2, 6, 2])
+col_date, col_blank, col_btn = st.columns([3.5, 4.5, 2])
 with col_date:
-    selected_date = st.date_input("📅 Chọn Ngày làm việc", value=st.session_state.get('selected_date', datetime.today().date()), key="main_date")
+    selected_date = st.date_input("📅 Chọn Ngày làm việc", value=st.session_state.get('selected_date', datetime.today().date()), format="MM/DD/YYYY", key="main_date")
 with col_btn:
     st.write("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True) 
     if st.button("🔄 Làm mới dữ liệu", type="secondary", use_container_width=True):
         date_str = selected_date.strftime("%Y-%m-%d")
-        for pfx, ext in [('ns', 'csv'), ('bn', 'json'), ('sched', 'json')]:
-            if os.path.exists(f"{pfx}_{date_str}.{ext}"): os.remove(f"{pfx}_{date_str}.{ext}")
+        if os.path.exists(f"sched_{date_str}.json"): os.remove(f"sched_{date_str}.json")
+        with open(f"bn_{date_str}.json", 'w', encoding='utf-8') as f:
+            json.dump([], f, ensure_ascii=False, indent=2)
         if USE_GSHEETS:
-            update_gsheets_safe("NhanSu", pd.DataFrame(), date_str)
             update_gsheets_safe("BenhNhan", pd.DataFrame(), date_str)
             update_gsheets_safe("LichTrinh", pd.DataFrame(), date_str)
-        st.session_state.clear()
+        st.session_state.bn_list = []
+        if 'df_schedule' in st.session_state: del st.session_state['df_schedule']
+        st.session_state.unscheduled_logs = []
         st.rerun()
 
 date_str = selected_date.strftime("%Y-%m-%d")
@@ -287,12 +313,34 @@ if 'selected_date' not in st.session_state or st.session_state.selected_date != 
         st.session_state.df_schedule['Finish'] = pd.to_datetime(st.session_state.df_schedule['Finish'])
     else:
         db_data = get_data_from_db("LichTrinh", date_str)
-        if db_data is not None:
+        if db_data is not None and not db_data.empty:
             st.session_state.df_schedule = db_data
             st.session_state.df_schedule['Start'] = pd.to_datetime(st.session_state.df_schedule['Start'])
             st.session_state.df_schedule['Finish'] = pd.to_datetime(st.session_state.df_schedule['Finish'])
         else:
-            if 'df_schedule' in st.session_state: del st.session_state['df_schedule']
+            fb_sched = get_fallback_file('sched', 'json', selected_date)
+            if fb_sched and len(st.session_state.bn_list) > 0:
+                try:
+                    df_fb = pd.read_json(fb_sched, orient='records')
+                    if not df_fb.empty:
+                        df_fb['Start'] = pd.to_datetime(df_fb['Start']).apply(lambda dt: datetime.combine(selected_date, dt.time()))
+                        df_fb['Finish'] = pd.to_datetime(df_fb['Finish']).apply(lambda dt: datetime.combine(selected_date, dt.time()))
+                        st.session_state.df_schedule = df_fb
+                    else:
+                        if 'df_schedule' in st.session_state: del st.session_state['df_schedule']
+                except:
+                    if 'df_schedule' in st.session_state: del st.session_state['df_schedule']
+            else:
+                fb_db = get_fallback_from_db("LichTrinh", selected_date)
+                if fb_db is not None and not fb_db.empty and len(st.session_state.bn_list) > 0:
+                    try:
+                        fb_db['Start'] = pd.to_datetime(fb_db['Start']).apply(lambda dt: datetime.combine(selected_date, dt.time()))
+                        fb_db['Finish'] = pd.to_datetime(fb_db['Finish']).apply(lambda dt: datetime.combine(selected_date, dt.time()))
+                        st.session_state.df_schedule = fb_db
+                    except:
+                        if 'df_schedule' in st.session_state: del st.session_state['df_schedule']
+                else:
+                    if 'df_schedule' in st.session_state: del st.session_state['df_schedule']
     
     st.rerun()
 
@@ -452,7 +500,7 @@ with col_table:
                 st.rerun()
             buf_bn = io.BytesIO()
             with pd.ExcelWriter(buf_bn, engine='openpyxl') as writer: build_bn_export_df(st.session_state.bn_list).to_excel(writer, index=False, sheet_name='Danh_Sach_BN')
-            col_k3.download_button("📤 Xuất DS BN", data=buf_bn.getvalue(), file_name=f"DanhSach_BN_{selected_date.strftime('%Y%m%d')}.xlsx", use_container_width=True)
+            col_k3.download_button("📤 Xuất DS BN", data=buf_bn.getvalue(), file_name=f"DanhSach_BN_{selected_date.strftime('%m%d%Y')}.xlsx", use_container_width=True)
             
             with st.expander("✏️ Điều chỉnh Y Lệnh hoặc Cho Ra Viện"):
                 edit_idx = st.selectbox("🔍 Chọn Bệnh nhân:", options=range(len(st.session_state.bn_list)), format_func=lambda i: f"{st.session_state.bn_list[i]['Ma_BN']} - {st.session_state.bn_list[i]['Ten_BN']}")
@@ -636,7 +684,7 @@ def do_import(df_sel, mode, skip_dup_name):
     st.session_state.bn_list = base
     save_bn_data_db(base, date_str)
     st.session_state.import_open = False
-    msg = f"✅ Đã nhập {added} bệnh nhân vào ngày {selected_date.strftime('%d/%m/%Y')}."
+    msg = f"✅ Đã nhập {added} bệnh nhân vào ngày {selected_date.strftime('%m/%d/%Y')}."
     if dups: msg += f" Bỏ qua {len(dups)} BN đã có sẵn: {', '.join(dups)}."
     st.session_state.import_msg = msg
 
@@ -652,7 +700,7 @@ if st.toggle("📥 Nhập danh sách bệnh nhân từ ngày khác / file Excel"
                 st.info("Chưa có ngày nào được lưu (app chỉ giữ dữ liệu 7 ngày gần nhất). Hãy dùng tuỳ chọn 'Từ file Excel'.")
             else:
                 d_sel = st.selectbox("Chọn ngày nguồn:", options=list(saved.keys()), key="import_src_date",
-                                     format_func=lambda d: f"{WEEKDAY_VN[datetime.strptime(d, '%Y-%m-%d').weekday()]}, {datetime.strptime(d, '%Y-%m-%d').strftime('%d/%m/%Y')} — {saved[d]} BN")
+                                     format_func=lambda d: f"{WEEKDAY_VN[datetime.strptime(d, '%Y-%m-%d').weekday()]}, {datetime.strptime(d, '%Y-%m-%d').strftime('%m/%d/%Y')} — {saved[d]} BN")
                 raw_list = load_bn_of_date(d_sel)
                 for r in raw_list: r['BS_Kham'] = [r.get('BS_Kham')]
                 src_key = f"d{d_sel}"
@@ -760,16 +808,38 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
         else:
             staff_starts[nv] = start_afternoon if ca == "Chiều" else base_time_sang
 
-    # ================== KHÔI PHỤC LỊCH ĐÃ XẾP TRƯỚC ĐÓ ==================
+    # ================== XÁC ĐỊNH LỊCH BASELINE (LỊCH ĐÃ XẾP TRƯỚC ĐÓ / NGÀY CŨ) ==================
+    df_baseline = None
+    if 'df_schedule' in st.session_state and isinstance(st.session_state.df_schedule, pd.DataFrame) and not st.session_state.df_schedule.empty:
+        df_baseline = st.session_state.df_schedule.copy()
+    elif os.path.exists(f"sched_{date_str}.json"):
+        try: df_baseline = pd.read_json(f"sched_{date_str}.json", orient='records')
+        except: pass
+    if df_baseline is None or df_baseline.empty:
+        fb_sched = get_fallback_file('sched', 'json', selected_date)
+        if fb_sched:
+            try: df_baseline = pd.read_json(fb_sched, orient='records')
+            except: pass
+
+    # Chuẩn hoá ngày của Start và Finish trong df_baseline sang selected_date
+    if df_baseline is not None and not df_baseline.empty:
+        df_baseline['Start'] = pd.to_datetime(df_baseline['Start']).apply(lambda dt: datetime.combine(selected_date, dt.time()))
+        df_baseline['Finish'] = pd.to_datetime(df_baseline['Finish']).apply(lambda dt: datetime.combine(selected_date, dt.time()))
+
+    baseline_bns = set(df_baseline['Ma_BN'].unique()) if (df_baseline is not None and not df_baseline.empty) else set()
+    new_bns = set(all_bn) - baseline_bns
+    old_bns = set(all_bn) & baseline_bns
+
     scheduled_khambenh = set()
-    scheduled_thuthuat = []
+    scheduled_thuthuat = [] # các cặp (ma_bn, b_task) đã được khôi phục
+    bn_last_finish = {}     # thời điểm kết thúc thủ thuật cũ cuối cùng của BN
     tt_dict = df_thongso.set_index('Ma_Thu_Thuat').to_dict('index')
-    
-    if 'df_schedule' in st.session_state and not st.session_state.df_schedule.empty:
-        df_old = st.session_state.df_schedule.copy()
-        for _, row in df_old.iterrows():
+
+    # BƯỚC 1: KHÔI PHỤC VÀ GIỮ NGUYÊN GIỜ LÀM CỦA BN CŨ ĐÃ XẾP TRƯỚC ĐÓ
+    if df_baseline is not None and not df_baseline.empty:
+        for _, row in df_baseline.iterrows():
             ma_bn = row['Ma_BN']
-            if ma_bn not in all_bn: continue
+            if ma_bn not in old_bns: continue  # Bỏ qua BN ra viện hoặc không còn trong danh sách
             
             b_task = row['Base_Task']
             t_start = row['Start']
@@ -780,24 +850,23 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             bn_obj = next((b for b in st.session_state.bn_list if b['Ma_BN'] == ma_bn), None)
             if not bn_obj: continue
             
+            nv_clean = str(nv).replace(" (Theo dõi)", "")
+            nv_available = nv_clean in staff_active_busy
+            
             if b_task == "Khám bệnh":
-                if not bn_obj.get('Kham_Benh', True): continue  # BN đã được bỏ chọn khám -> huỷ ca khám cũ
+                if not bn_obj.get('Kham_Benh', True): continue  # BN đổi thành không khám
+                if not nv_available: continue # BS cũ nghỉ -> xếp lại ca khám
                 if l_tg == "Thực hiện":
                     scheduled_khambenh.add(ma_bn)
                     patient_ready[ma_bn] = max(patient_ready.get(ma_bn, datetime.min), t_finish)
-            else:
-                y_lenh_list = [t.strip() for t in bn_obj['Y_Lenh'].split(",") if t.strip()]
-                if b_task not in y_lenh_list: continue
-                if l_tg == "Thực hiện":
-                    scheduled_thuthuat.append((ma_bn, b_task))
-            
-            schedule_records.append(row.to_dict())
-            
-            if l_tg == "Thực hiện":
-                if b_task == "Khám bệnh":
                     patient_busy[ma_bn].append((t_start, t_finish))
                     if nv in staff_active_busy: staff_active_busy[nv].append((t_start, t_finish + timedelta(minutes=2)))
-                else:
+            else:
+                y_lenh_list = [t.strip() for t in bn_obj['Y_Lenh'].split(",") if t.strip()]
+                if b_task not in y_lenh_list: continue # Thủ thuật đã bị bỏ khỏi y lệnh
+                if not nv_available: continue # Nhân viên cũ nghỉ -> xếp lại
+                if l_tg == "Thực hiện":
+                    scheduled_thuthuat.append((ma_bn, b_task))
                     tt_info = tt_dict.get(ma_thu_thuat_dict.get(b_task))
                     if tt_info:
                         thao_tac = int(tt_info['Thoi_Gian_Thao_Tac_Phut'])
@@ -805,6 +874,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
                         end_total = t_start + timedelta(minutes=thao_tac + cho)
                         
                         patient_busy[ma_bn].append((t_start, end_total + timedelta(minutes=2)))
+                        bn_last_finish[ma_bn] = max(bn_last_finish.get(ma_bn, datetime.min), end_total)
                         if nv in staff_active_busy: staff_active_busy[nv].append((t_start, t_finish + timedelta(minutes=2)))
                         staff_load[nv] = staff_load.get(nv, 0) + thao_tac
                         staff_task_count[nv] = staff_task_count.get(nv, 0) + 1
@@ -815,8 +885,15 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
                             if not get_conflict_end(m_intervals, t_start, end_total):
                                 m_intervals.append((t_start, end_total))
                                 break
+            
+            r_dict = row.to_dict()
+            r_dict['Start'] = t_start
+            r_dict['Finish'] = t_finish
+            r_dict['Thay_Doi'] = "" # Giữ nguyên giờ làm ngày cũ
+            r_dict['Gio_Cu'] = ""
+            schedule_records.append(r_dict)
 
-    # ================== GIAI ĐOẠN 1: XẾP LỊCH KHÁM BỆNH ==================
+    # BƯỚC 2: XẾP LỊCH KHÁM BỆNH CHO CÁC CA CHƯA CÓ LỊCH KHÁM (BN MỚI / ĐỔI BS)
     bns_fixed = []
     bns_auto = []
     for bn in st.session_state.bn_list:
@@ -824,8 +901,6 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             continue
         gk_str = str(bn.get('Gio_Kham', '')).strip()
         if not bn.get('Kham_Benh', True):
-            # BN KHÔNG khám (VD: T7, CN): bỏ qua 5 phút khám, làm thủ thuật luôn theo y lệnh cũ.
-            # Nếu có nhập "Giờ khám" thì xem như giờ BN có mặt -> thủ thuật bắt đầu từ giờ đó.
             if gk_str and gk_str.lower() not in ['nan', 'none']:
                 try: patient_ready[bn['Ma_BN']] = datetime.strptime(f"{date_str} {gk_str}", "%Y-%m-%d %H:%M")
                 except: pass
@@ -837,81 +912,82 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             except: bns_auto.append(bn)
         else: bns_auto.append(bn)
 
-    # 1A. Ưu tiên rải lịch Khám có giờ cố định trước
+    # 2A. Ưu tiên rải lịch Khám có giờ cố định trước
     bns_fixed.sort(key=lambda x: x[1])
     for bn, start_t in bns_fixed:
         ma_bn = bn['Ma_BN']
         bs = actual_bs_dict[ma_bn]
-        
         t = start_t
         scheduled = False
         while t < limit_end_of_day:
             end_t = t + timedelta(minutes=5)
             if t < limit_morning and end_t > limit_morning: t = start_afternoon; continue
             if limit_morning <= t < start_afternoon: t = start_afternoon; continue
-            
             if not check_shift(t, staff_shifts[bs], limit_morning, start_afternoon):
                 t += timedelta(minutes=1); continue
-
             c_p = get_conflict_end(patient_busy[ma_bn], t, end_t + timedelta(minutes=2))
             if c_p: t = c_p; continue
-
             c_s = get_conflict_end(staff_active_busy[bs], t, end_t + timedelta(minutes=2))
             if c_s: t = c_s; continue
-            
             scheduled = True
             break
             
         if scheduled:
             patient_busy[ma_bn].append((t, end_t))
             staff_active_busy[bs].append((t, end_t + timedelta(minutes=2)))
-            patient_ready[ma_bn] = end_t # Thủ thuật bắt đầu ngay sau 5 phút khám (VD 07:30 khám -> 07:35 thủ thuật)
-            schedule_records.append(dict(Task="Khám bệnh", Base_Task="Khám bệnh", Loai_Thoi_Gian="Thực hiện", Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=bs, Ten_NV_Full=ten_nv_dict.get(bs, bs), Start=t, Finish=end_t))
+            patient_ready[ma_bn] = end_t
+            schedule_records.append(dict(
+                Task="Khám bệnh", Base_Task="Khám bệnh", Loai_Thoi_Gian="Thực hiện",
+                Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=bs,
+                Ten_NV_Full=ten_nv_dict.get(bs, bs), Start=t, Finish=end_t,
+                Thay_Doi="Mới" if ma_bn in new_bns else "Đổi giờ", Gio_Cu=""
+            ))
         else:
             unscheduled_logs.append(f"❌ **{ten_bn_dict[ma_bn]}**: Không kịp xếp 'Khám bệnh' do Bác sĩ {ten_nv_dict.get(bs, bs)} đã quá tải/hết giờ ca {staff_shifts[bs]}.")
-            patient_ready[ma_bn] = limit_end_of_day # Khóa không cho làm thủ thuật nếu chưa khám
+            patient_ready[ma_bn] = limit_end_of_day
 
-    # 1B. Điền các ca Khám không chọn giờ (Auto) vào khe hở của BS
-    bns_auto.sort(key=lambda x: x.get('Created_At', 0))
+    # 2B. Điền các ca Khám tự động: Ưu tiên BN MỚI xếp trước để chen vào khe khám sớm của BN ra viện
+    bns_auto.sort(key=lambda x: (0 if x['Ma_BN'] in new_bns else 1, x.get('Created_At', 0)))
     for bn in bns_auto:
         ma_bn = bn['Ma_BN']
         bs = actual_bs_dict[ma_bn]
-        
         t = staff_starts[bs]
         scheduled = False
         while t < limit_end_of_day:
             end_t = t + timedelta(minutes=5)
             if t < limit_morning and end_t > limit_morning: t = start_afternoon; continue
             if limit_morning <= t < start_afternoon: t = start_afternoon; continue
-            
             if not check_shift(t, staff_shifts[bs], limit_morning, start_afternoon):
                 t += timedelta(minutes=1); continue
-
             c_p = get_conflict_end(patient_busy[ma_bn], t, end_t + timedelta(minutes=2))
             if c_p: t = c_p; continue
-
             c_s = get_conflict_end(staff_active_busy[bs], t, end_t + timedelta(minutes=2))
             if c_s: t = c_s; continue
-            
             scheduled = True
             break
             
         if scheduled:
             patient_busy[ma_bn].append((t, end_t))
             staff_active_busy[bs].append((t, end_t + timedelta(minutes=2)))
-            patient_ready[ma_bn] = end_t # Thủ thuật bắt đầu ngay sau 5 phút khám
-            schedule_records.append(dict(Task="Khám bệnh", Base_Task="Khám bệnh", Loai_Thoi_Gian="Thực hiện", Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=bs, Ten_NV_Full=ten_nv_dict.get(bs, bs), Start=t, Finish=end_t))
+            patient_ready[ma_bn] = end_t
+            schedule_records.append(dict(
+                Task="Khám bệnh", Base_Task="Khám bệnh", Loai_Thoi_Gian="Thực hiện",
+                Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=bs,
+                Ten_NV_Full=ten_nv_dict.get(bs, bs), Start=t, Finish=end_t,
+                Thay_Doi="Mới" if ma_bn in new_bns else "Đổi giờ", Gio_Cu=""
+            ))
         else:
             unscheduled_logs.append(f"❌ **{ten_bn_dict[ma_bn]}**: Không kịp xếp 'Khám bệnh' do Bác sĩ {ten_nv_dict.get(bs, bs)} đã quá tải/hết giờ ca {staff_shifts[bs]}.")
-            patient_ready[ma_bn] = limit_end_of_day # Khóa không cho làm thủ thuật nếu chưa khám
+            patient_ready[ma_bn] = limit_end_of_day
 
-    # ================== GIAI ĐOẠN 2: XẾP LỊCH THỦ THUẬT QUÉT NGANG ==================
+    # BƯỚC 3: TẬP HỢP CÁC JOBS THỦ THUẬT CẦN XẾP
+    # - BN MỚI: Ưu tiên xếp chen vào các khung giờ trống của BN ra viện
+    # - BN CŨ (thủ thuật mới thêm): xếp vào khung giờ trống PHÍA SAU các thủ thuật cũ của BN đó
     jobs = []
-    # tt_dict = df_thongso.set_index('Ma_Thu_Thuat').to_dict('index') # Already defined above
     for bn in st.session_state.bn_list:
         ma_bn = bn['Ma_BN']
         if patient_ready.get(ma_bn) == limit_end_of_day: 
-            continue # Bỏ qua xếp lịch thủ thuật cho các ca không khám được
+            continue
             
         rv_str = str(bn.get('Gio_Ra_Vien', '')).strip()
         discharge_dt = limit_end_of_day
@@ -919,12 +995,42 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             try: discharge_dt = datetime.strptime(f"{date_str} {rv_str}", "%Y-%m-%d %H:%M")
             except: pass
 
+        is_new_bn = (ma_bn in new_bns)
         for tt in [t.strip() for t in bn['Y_Lenh'].split(",") if t.strip()]:
             if (ma_bn, tt) in scheduled_thuthuat:
                 scheduled_thuthuat.remove((ma_bn, tt))
                 continue
-            jobs.append({'Ma_BN': ma_bn, 'Ma_Thu_Thuat': ma_thu_thuat_dict[tt], 'Ten_Thu_Thuat': tt, 'Discharge_Time': discharge_dt, 'Created_At': bn.get('Created_At', 0)})
+            
+            # Kiểm tra xem thủ thuật này từng có trong lịch baseline hay là mới thêm vào
+            old_rows = pd.DataFrame()
+            if df_baseline is not None and not df_baseline.empty:
+                old_rows = df_baseline[(df_baseline['Ma_BN'] == ma_bn) & (df_baseline['Base_Task'] == tt)]
+            
+            if is_new_bn:
+                thay_doi = "Mới"
+                gio_cu = ""
+                earliest_t = max(base_time_sang, patient_ready.get(ma_bn, base_time_sang))
+            elif not old_rows.empty:
+                thay_doi = "Đổi giờ"
+                gio_cu = old_rows.iloc[0]['Start'].strftime("%H:%M")
+                earliest_t = max(base_time_sang, patient_ready.get(ma_bn, base_time_sang))
+            else:
+                # Thủ thuật mới thêm vào của BN cũ: Bắt đầu dò từ sau thủ thuật cũ cuối cùng của BN
+                thay_doi = "Mới"
+                gio_cu = ""
+                earliest_t = max(base_time_sang, bn_last_finish.get(ma_bn, base_time_sang), patient_ready.get(ma_bn, base_time_sang))
 
+            jobs.append({
+                'Ma_BN': ma_bn, 'Ma_Thu_Thuat': ma_thu_thuat_dict[tt], 'Ten_Thu_Thuat': tt,
+                'Discharge_Time': discharge_dt, 'Created_At': bn.get('Created_At', 0),
+                'Is_New_BN': is_new_bn, 'Earliest_T': earliest_t,
+                'Thay_Doi': thay_doi, 'Gio_Cu': gio_cu
+            })
+
+    # SẮP XẾP JOBS: Ưu tiên BN MỚI xếp trước để chen vào khe trống của BN ra viện
+    jobs.sort(key=lambda j: (0 if j['Is_New_BN'] else 1, j['Discharge_Time'], j['Created_At']))
+
+    # BƯỚC 4: THUẬT TOÁN QUÉT XẾP THỦ THUẬT
     while jobs:
         best_job_idx = -1
         best_start = limit_end_of_day
@@ -941,13 +1047,9 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             if may_moc not in machine_busy: may_moc = 'Không'
             
             actual_bs = actual_bs_dict[ma_bn]
-            
-            # Nguyên tắc ĐỘC QUYỀN: Bác sĩ nào khám thì Bác sĩ đó làm
             potential_staff = [actual_bs] if tt_info['Nguoi_Phu_Trach'] == 'BS' else ktv_list
             
-            # Quét tìm khe hở sớm nhất (Bắt đầu dò từ lúc bệnh nhân vừa khám xong)
-            t = max(base_time_sang, patient_ready.get(ma_bn, base_time_sang))
-            
+            t = job['Earliest_T']
             job_best_t = limit_end_of_day
             job_best_s = None
             job_best_m = None
@@ -974,7 +1076,6 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
                     if not check_shift(t, staff_shifts[s], limit_morning, start_afternoon): continue
                     c_e = get_conflict_end(staff_active_busy[s], t, end_active + timedelta(minutes=2))
                     if not c_e:
-                        # Cân bằng tải: chọn nhân viên rảnh có tổng khối lượng việc ít nhất
                         if staff_assigned is None or (staff_load.get(s, 0), staff_task_count.get(s, 0)) < (staff_load.get(staff_assigned, 0), staff_task_count.get(staff_assigned, 0)):
                             staff_assigned = s
                         continue
@@ -992,10 +1093,12 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             if job_best_t < best_start:
                 best_start, best_job_idx, best_staff, best_machine_idx = job_best_t, i, job_best_s, job_best_m
             elif job_best_t == best_start and job_best_t != limit_end_of_day:
-                if job['Discharge_Time'] < jobs[best_job_idx]['Discharge_Time']:
+                # Ưu tiên BN mới chen vào khe sớm, rồi đến giờ ra viện
+                if job['Is_New_BN'] and not jobs[best_job_idx]['Is_New_BN']:
+                    best_start, best_job_idx, best_staff, best_machine_idx = job_best_t, i, job_best_s, job_best_m
+                elif job['Discharge_Time'] < jobs[best_job_idx]['Discharge_Time']:
                     best_start, best_job_idx, best_staff, best_machine_idx = job_best_t, i, job_best_s, job_best_m
 
-        # BẮT LỖI CẢNH BÁO QUÁ TẢI (Không tìm được chỗ nào cho tất cả các thủ thuật còn lại)
         if best_job_idx == -1:
             for job in jobs:
                 req_s = actual_bs_dict[job['Ma_BN']] if tt_dict[job['Ma_Thu_Thuat']]['Nguoi_Phu_Trach'] == 'BS' else 'KTV'
@@ -1015,15 +1118,26 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
         end_active = best_start + timedelta(minutes=thao_tac) 
         end_total = best_start + timedelta(minutes=thao_tac + cho)       
         
-        schedule_records.append(dict(Task=job['Ten_Thu_Thuat'], Base_Task=job['Ten_Thu_Thuat'], Loai_Thoi_Gian="Thực hiện", Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=best_staff, Ten_NV_Full=ten_nv_dict.get(best_staff, best_staff), Start=best_start, Finish=end_active))
+        schedule_records.append(dict(
+            Task=job['Ten_Thu_Thuat'], Base_Task=job['Ten_Thu_Thuat'], Loai_Thoi_Gian="Thực hiện",
+            Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=best_staff,
+            Ten_NV_Full=ten_nv_dict.get(best_staff, best_staff), Start=best_start, Finish=end_active,
+            Thay_Doi=job['Thay_Doi'], Gio_Cu=job['Gio_Cu']
+        ))
         if cho > 0:
-            schedule_records.append(dict(Task=f"{job['Ten_Thu_Thuat']} - Lưu", Base_Task=job['Ten_Thu_Thuat'], Loai_Thoi_Gian="Theo dõi", Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=f"{best_staff} (Theo dõi)", Ten_NV_Full=f"{ten_nv_dict.get(best_staff, best_staff)} (Theo dõi)", Start=end_active, Finish=end_total))
+            schedule_records.append(dict(
+                Task=f"{job['Ten_Thu_Thuat']} - Lưu", Base_Task=job['Ten_Thu_Thuat'], Loai_Thoi_Gian="Theo dõi",
+                Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=f"{best_staff} (Theo dõi)",
+                Ten_NV_Full=f"{ten_nv_dict.get(best_staff, best_staff)} (Theo dõi)", Start=end_active, Finish=end_total,
+                Thay_Doi=job['Thay_Doi'], Gio_Cu=job['Gio_Cu']
+            ))
             
         patient_busy[ma_bn].append((best_start, end_total + timedelta(minutes=2)))
         staff_active_busy[best_staff].append((best_start, end_active + timedelta(minutes=2)))
         staff_load[best_staff] = staff_load.get(best_staff, 0) + thao_tac
         staff_task_count[best_staff] = staff_task_count.get(best_staff, 0) + 1
         machine_busy[may_moc][best_machine_idx].append((best_start, end_total))
+        bn_last_finish[ma_bn] = max(bn_last_finish.get(ma_bn, datetime.min), end_total)
 
     st.session_state.unscheduled_logs = unscheduled_logs
     df_sched = pd.DataFrame(schedule_records)
@@ -1036,7 +1150,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
 # ==========================================
 if 'df_schedule' in st.session_state:
     df_schedule = st.session_state.df_schedule
-    st.success(f"✅ Đã lập xong lịch cho ngày: {selected_date.strftime('%d/%m/%Y')}")
+    st.success(f"✅ Đã lập xong lịch cho ngày: {selected_date.strftime('%m/%d/%Y')}")
     
     # ⚠️ HIỂN THỊ CẢNH BÁO QUÁ TẢI/VƯỢT GIỜ
     if st.session_state.get('unscheduled_logs'):
@@ -1048,17 +1162,52 @@ if 'df_schedule' in st.session_state:
     df_schedule['Start_str'] = df_schedule['Start'].dt.strftime('%H:%M')
     df_schedule['Finish_str'] = df_schedule['Finish'].dt.strftime('%H:%M')
     
+    for _c in ('Thay_Doi', 'Gio_Cu'):
+        if _c not in df_schedule.columns: df_schedule[_c] = ""
+        df_schedule[_c] = df_schedule[_c].fillna("").astype(str)
+        
+    def _change_note(r):
+        if r['Thay_Doi'] == "Mới": return "🆕 Mới"
+        if r['Thay_Doi'] == "Đổi giờ":
+            gc = f" (cũ: {r['Gio_Cu']})" if r['Gio_Cu'] else ""
+            return f"⚠️ Đổi giờ{gc}"
+        return ""
+    df_schedule['Ghi_Chu_TD'] = df_schedule.apply(_change_note, axis=1)
+
+    def style_schedule_table(df):
+        def hl_row(row):
+            note = str(row.get('Ghi chú', ''))
+            if note.startswith("⚠️"):
+                return ['background-color: #FEF9E7; color: #7D4E00; font-weight: bold;'] * len(row)
+            if note.startswith("🆕"):
+                return ['background-color: #E8F8F5; color: #117864; font-weight: bold;'] * len(row)
+            return [''] * len(row)
+        return df.style.apply(hl_row, axis=1)
+
+    # Hiển thị danh sách các mục có thay đổi (Mới hoặc Đổi giờ)
+    _changed = df_schedule[(df_schedule['Ghi_Chu_TD'] != "") & (df_schedule['Loai_Thoi_Gian'] == "Thực hiện")].sort_values(by='Start')
+    if not _changed.empty:
+        n_moi = sum(1 for _, r in _changed.iterrows() if r['Thay_Doi'] == "Mới")
+        n_doi = len(_changed) - n_moi
+        with st.expander(f"🔔 Phát hiện {len(_changed)} mục thay đổi so với lịch trước đó (🆕 {n_moi} mới · ⚠️ {n_doi} đổi giờ)", expanded=True):
+            st.caption("ℹ️ Giờ của BN cũ được giữ lại; BN mới được ưu tiên chen vào khe trống của BN ra viện; thủ thuật mới của BN cũ được xếp phía sau:")
+            df_ch_view = _changed[['Ten_BN', 'Task', 'Ten_NV_Full', 'Start_str', 'Finish_str', 'Ghi_Chu_TD']].rename(
+                columns={'Ten_BN': 'Bệnh nhân', 'Task': 'Thủ thuật', 'Ten_NV_Full': 'Nhân viên', 'Start_str': 'Bắt đầu', 'Finish_str': 'Kết thúc', 'Ghi_Chu_TD': 'Ghi chú'}
+            )
+            st.dataframe(style_schedule_table(df_ch_view), hide_index=True, use_container_width=True)
+
     df_export = df_schedule.copy()
-    df_export['Ngày'] = df_export['Start'].dt.strftime('%d/%m/%Y')
-    df_export = df_export[['Ngày', 'Ten_NV_Full', 'Ma_BN', 'Ten_BN', 'Task', 'Start_str', 'Finish_str']]
-    df_export.columns = ['Ngày', 'Nhân Viên', 'Mã BN', 'Tên Bệnh Nhân', 'Thủ thuật', 'Bắt Đầu', 'Kết Thúc']
+    df_export['Ngày'] = df_export['Start'].dt.strftime('%m/%d/%Y')
+    df_export['Ghi chú thay đổi'] = df_export['Ghi_Chu_TD']
+    df_export = df_export[['Ngày', 'Ten_NV_Full', 'Ma_BN', 'Ten_BN', 'Task', 'Start_str', 'Finish_str', 'Ghi chú thay đổi']]
+    df_export.columns = ['Ngày', 'Nhân Viên', 'Mã BN', 'Tên Bệnh Nhân', 'Thủ thuật', 'Bắt Đầu', 'Kết Thúc', 'Ghi chú thay đổi']
     df_export.sort_values(by=['Nhân Viên', 'Bắt Đầu'], inplace=True)
 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         df_export.to_excel(writer, index=False, sheet_name='Lich_Trinh')
         build_bn_export_df(st.session_state.bn_list).to_excel(writer, index=False, sheet_name='Danh_Sach_BN')
-    st.download_button("📥 TẢI XUỐNG FILE EXCEL LỊCH PHÂN CÔNG", data=buffer.getvalue(), file_name=f"Lich_YHCT_{selected_date.strftime('%Y%m%d')}.xlsx", type="primary")
+    st.download_button("📥 TẢI XUỐNG FILE EXCEL LỊCH PHÂN CÔNG", data=buffer.getvalue(), file_name=f"Lich_YHCT_{selected_date.strftime('%m%d%Y')}.xlsx", type="primary")
     st.divider()
 
     st.markdown("<h3 style='color: #8E44AD; border-bottom: 2px solid #8E44AD; padding-bottom: 5px;'>4. TRA CỨU LỊCH TRÌNH CÁ NHÂN</h3>", unsafe_allow_html=True)
@@ -1067,13 +1216,19 @@ if 'df_schedule' in st.session_state:
         nv_chon = st.selectbox("Tra cứu lịch Nhân viên:", options=["-- Chọn Nhân viên --"] + list(df_schedule['Ten_NV_Full'].str.replace(" (Theo dõi)", "").unique()))
         if nv_chon != "-- Chọn Nhân viên --":
             df_nv = df_schedule[df_schedule['Ten_NV_Full'].str.contains(nv_chon, regex=False)].sort_values(by='Start')
-            st.dataframe(df_nv[['Start_str', 'Finish_str', 'Task', 'Ten_BN']].rename(columns={'Start_str': 'Bắt đầu', 'Finish_str': 'Kết thúc', 'Task': 'Công việc', 'Ten_BN': 'Bệnh nhân'}), hide_index=True, use_container_width=True)
+            df_nv_view = df_nv[['Start_str', 'Finish_str', 'Task', 'Ten_BN', 'Ghi_Chu_TD']].rename(
+                columns={'Start_str': 'Bắt đầu', 'Finish_str': 'Kết thúc', 'Task': 'Công việc', 'Ten_BN': 'Bệnh nhân', 'Ghi_Chu_TD': 'Ghi chú'}
+            )
+            st.dataframe(style_schedule_table(df_nv_view), hide_index=True, use_container_width=True)
 
     with col_tc_bn:
         bn_chon = st.selectbox("Tra cứu lịch Bệnh nhân:", options=["-- Chọn Bệnh nhân --"] + list(df_schedule['Ten_BN'].unique()))
         if bn_chon != "-- Chọn Bệnh nhân --":
             df_bn = df_schedule[df_schedule['Ten_BN'] == bn_chon].sort_values(by='Start')
-            st.dataframe(df_bn[['Start_str', 'Finish_str', 'Task', 'Ten_NV_Full']].rename(columns={'Start_str': 'Bắt đầu', 'Finish_str': 'Kết thúc', 'Task': 'Thủ thuật', 'Ten_NV_Full': 'Nhân viên phụ trách'}), hide_index=True, use_container_width=True)
+            df_bn_view = df_bn[['Start_str', 'Finish_str', 'Task', 'Ten_NV_Full', 'Ghi_Chu_TD']].rename(
+                columns={'Start_str': 'Bắt đầu', 'Finish_str': 'Kết thúc', 'Task': 'Thủ thuật', 'Ten_NV_Full': 'Nhân viên phụ trách', 'Ghi_Chu_TD': 'Ghi chú'}
+            )
+            st.dataframe(style_schedule_table(df_bn_view), hide_index=True, use_container_width=True)
 
     st.divider()
     
@@ -1082,14 +1237,14 @@ if 'df_schedule' in st.session_state:
         y_order = sorted(df_schedule['Nhan_Vien'].unique(), key=sort_nv_group)
 
         st.subheader("Lịch trình Tổng quát Nhân viên")
-        fig_nv = px.timeline(df_schedule, x_start="Start", x_end="Finish", y="Nhan_Vien", color="Base_Task", text="Ma_BN", custom_data=['Task', 'Start_str', 'Finish_str', 'Ten_BN', 'Ten_NV_Full'])
-        fig_nv.update_traces(marker_line_color='rgba(0,0,0,0.7)', marker_line_width=1.5, opacity=0.9, textfont=dict(color='white', size=13, weight="bold"), hovertemplate="<b>%{customdata[4]}</b><br>Bệnh nhân: %{customdata[3]}<br>Thủ thuật: %{customdata[0]}<br>Thời gian: %{customdata[1]} - %{customdata[2]}<extra></extra>", textposition='inside', insidetextanchor='middle')
+        fig_nv = px.timeline(df_schedule, x_start="Start", x_end="Finish", y="Nhan_Vien", color="Base_Task", text="Ma_BN", custom_data=['Task', 'Start_str', 'Finish_str', 'Ten_BN', 'Ten_NV_Full', 'Ghi_Chu_TD'])
+        fig_nv.update_traces(marker_line_color='rgba(0,0,0,0.7)', marker_line_width=1.5, opacity=0.9, textfont=dict(color='white', size=13, weight="bold"), hovertemplate="<b>%{customdata[4]}</b><br>Bệnh nhân: %{customdata[3]}<br>Thủ thuật: %{customdata[0]}<br>Thời gian: %{customdata[1]} - %{customdata[2]}<br>%{customdata[5]}<extra></extra>", textposition='inside', insidetextanchor='middle')
         fig_nv.update_layout(yaxis=dict(categoryorder='array', categoryarray=y_order, autorange="reversed", title=""), legend_title="Chú thích Y lệnh", uniformtext_minsize=10, uniformtext_mode='hide', xaxis_tickformat="%H:%M", xaxis_title="", plot_bgcolor="rgba(240, 240, 240, 0.5)", height=700)
         st.plotly_chart(fig_nv, use_container_width=True)
 
         st.subheader("Lộ trình Bệnh nhân di chuyển")
-        fig_bn = px.timeline(df_schedule, x_start="Start", x_end="Finish", y="Ma_BN", color="Base_Task", text="Task", custom_data=['Ten_NV_Full', 'Start_str', 'Finish_str', 'Task', 'Ten_BN'])
-        fig_bn.update_traces(marker_line_color='rgba(0,0,0,0.7)', marker_line_width=1.5, opacity=0.9, textfont=dict(color='white', size=13, weight="bold"), hovertemplate="<b>Bệnh nhân: %{customdata[4]}</b><br>Nhân viên: %{customdata[0]}<br>Thủ thuật: %{customdata[3]}<br>Thời gian: %{customdata[1]} - %{customdata[2]}<extra></extra>", textposition='inside', insidetextanchor='middle')
+        fig_bn = px.timeline(df_schedule, x_start="Start", x_end="Finish", y="Ma_BN", color="Base_Task", text="Task", custom_data=['Ten_NV_Full', 'Start_str', 'Finish_str', 'Task', 'Ten_BN', 'Ghi_Chu_TD'])
+        fig_bn.update_traces(marker_line_color='rgba(0,0,0,0.7)', marker_line_width=1.5, opacity=0.9, textfont=dict(color='white', size=13, weight="bold"), hovertemplate="<b>Bệnh nhân: %{customdata[4]}</b><br>Nhân viên: %{customdata[0]}<br>Thủ thuật: %{customdata[3]}<br>Thời gian: %{customdata[1]} - %{customdata[2]}<br>%{customdata[5]}<extra></extra>", textposition='inside', insidetextanchor='middle')
         fig_bn.update_layout(yaxis=dict(autorange="reversed", title=""), showlegend=False, uniformtext_minsize=10, uniformtext_mode='hide', xaxis_tickformat="%H:%M", xaxis_title="", plot_bgcolor="rgba(240, 240, 240, 0.5)", height=500)
         st.plotly_chart(fig_bn, use_container_width=True)
 
