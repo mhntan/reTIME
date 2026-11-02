@@ -91,7 +91,7 @@ def cleanup_old_files():
     limit_date = datetime.today().date() - timedelta(days=7)
     try:
         for f in os.listdir():
-            if f.startswith(('ns_', 'bn_', 'sched_')) and (f.endswith('.csv') or f.endswith('.json')):
+            if f.startswith(('ns_', 'bn_', 'sched_', 'may_')) and (f.endswith('.csv') or f.endswith('.json')):
                 date_str = f.split('_')[1].split('.')[0]
                 if datetime.strptime(date_str, "%Y-%m-%d").date() < limit_date: os.remove(f)
     except: pass
@@ -295,6 +295,63 @@ def load_base_data(file_name):
 try: df_thongso = load_base_data('data.xlsx')
 except Exception as e: st.error(f"⚠️ Không tìm thấy file 'data.xlsx'. Lỗi hệ thống: {e}"); st.stop()
 
+DEFAULT_MACHINE_CAPS = {
+    'Máy điện xung': 4, 'Máy từ trường': 1, 'Máy xoa bóp': 2, 'Máy kéo dãn': 1,
+    'Máy kéo': 1, 'Máy siêu âm': 2, 'Máy Laser': 1, 'Máy xung kích': 1,
+    'Máy hồng ngoại': 3, 'Máy Laser NM': 2, 'Máy Parafin': 2, 'Máy sóng ngắn': 1
+}
+MAY_COLS = ['Ten_May', 'Thu_Thuat', 'Phu_Trach', 'Thoi_Gian', 'So_Luong_Mac_Dinh', 'So_Luong', 'Ghi_Chu']
+
+def get_default_may():
+    rows, seen = [], {}
+    for _, r in df_thongso.iterrows():
+        may = str(r['Yeu_Cau_May_Moc']).strip()
+        if not may or may in ('Không', 'Không dùng máy'): continue
+        tt = str(r['Ten_Thu_Thuat']).strip()
+        pt = str(r['Nguoi_Phu_Trach']).strip()
+        thao_tac = int(r['Thoi_Gian_Thao_Tac_Phut'])
+        cho = int(r['Thoi_Gian_Cho_Phut'])
+        tg_str = f"{thao_tac}p thao tác + {cho}p chờ" if cho > 0 else f"{thao_tac}p thao tác"
+        if may not in seen:
+            def_cap = DEFAULT_MACHINE_CAPS.get(may, 1)
+            seen[may] = len(rows)
+            rows.append({
+                'Ten_May': may, 'Thu_Thuat': tt, 'Phu_Trach': pt, 'Thoi_Gian': tg_str,
+                'So_Luong_Mac_Dinh': def_cap, 'So_Luong': def_cap, 'Ghi_Chu': ''
+            })
+        else:
+            idx = seen[may]
+            if tt not in rows[idx]['Thu_Thuat'].split(', '):
+                rows[idx]['Thu_Thuat'] += f", {tt}"
+    return pd.DataFrame(rows, columns=MAY_COLS)
+
+def normalize_may(df):
+    base = get_default_may()
+    if df is None or df.empty or 'Ten_May' not in df.columns:
+        return base
+    sl_map, gc_map = {}, {}
+    for _, r in df.iterrows():
+        m = clean_str(r.get('Ten_May', ''))
+        if not m: continue
+        try:
+            v = int(float(r.get('So_Luong', DEFAULT_MACHINE_CAPS.get(m, 1))))
+            sl_map[m] = max(0, v)
+        except (TypeError, ValueError):
+            pass
+        gc_map[m] = clean_str(r.get('Ghi_Chu', ''))
+    for i in base.index:
+        m = base.at[i, 'Ten_May']
+        if m in sl_map: base.at[i, 'So_Luong'] = sl_map[m]
+        if m in gc_map: base.at[i, 'Ghi_Chu'] = gc_map[m]
+    base['So_Luong'] = base['So_Luong'].astype(int)
+    base['So_Luong_Mac_Dinh'] = base['So_Luong_Mac_Dinh'].astype(int)
+    return base[MAY_COLS].reset_index(drop=True)
+
+def save_may_data_db(df, date_str):
+    df_save = df[['Ten_May', 'So_Luong', 'Ghi_Chu']].copy()
+    df_save.to_csv(f"may_{date_str}.csv", index=False)
+    update_gsheets_safe("MayMoc", df_save, date_str)
+
 # ==========================================
 # THANH CÔNG CỤ CHỌN NGÀY & LÀM MỚI 
 # ==========================================
@@ -338,6 +395,22 @@ if 'selected_date' not in st.session_state or st.session_state.selected_date != 
             
     st.session_state.ns_data = normalize_ns(st.session_state.ns_data)
     st.session_state.ns_ver = st.session_state.get('ns_ver', 0) + 1  # Làm mới bảng nhân sự khi đổi ngày
+
+    if os.path.exists(f"may_{date_str}.csv"): st.session_state.may_data = pd.read_csv(f"may_{date_str}.csv")
+    else:
+        db_may = get_data_from_db("MayMoc", date_str)
+        if db_may is not None: st.session_state.may_data = db_may
+        else:
+            fb_may = get_fallback_file('may', 'csv', selected_date)
+            if fb_may: st.session_state.may_data = pd.read_csv(fb_may)
+            else:
+                fb_db_may = get_fallback_from_db("MayMoc", selected_date)
+                if fb_db_may is not None: st.session_state.may_data = fb_db_may
+                else: st.session_state.may_data = get_default_may()
+    st.session_state.may_data = normalize_may(st.session_state.may_data)
+    st.session_state.may_ver = st.session_state.get('may_ver', 0) + 1
+    st.session_state.may_ed_ver = st.session_state.get('may_ed_ver', 0) + 1
+    st.session_state.sched_machine_caps = dict(zip(st.session_state.may_data['Ten_May'], st.session_state.may_data['So_Luong']))
 
     if os.path.exists(f"bn_{date_str}.json"):
         with open(f"bn_{date_str}.json", 'r', encoding='utf-8') as f: st.session_state.bn_list = sanitize_bn_list(json.load(f))
@@ -482,6 +555,91 @@ ten_nv_dict = dict(zip(st.session_state.ns_data['Ma_Nhan_Vien'], st.session_stat
 if not ktv_list or not bs_list:
     st.warning("⚠️ Hệ thống cần ít nhất 1 BS và 1 KTV đánh dấu 'Đi làm' để tiếp tục.")
     st.stop()
+
+# ==========================================
+# ==========================================
+# KHU VỰC 1B: ĐIỀU CHỈNH SỐ LƯỢNG MÁY MÓC THỰC TẾ
+# ==========================================
+if 'may_data' not in st.session_state:
+    st.session_state.may_data = get_default_may()
+
+st.markdown("<br><h3 style='color: #16A085; border-bottom: 2px solid #16A085; padding-bottom: 5px;'>🔧 ĐIỀU CHỈNH SỐ LƯỢNG MÁY MÓC THỰC TẾ</h3>", unsafe_allow_html=True)
+
+col_m_info, col_m_reset = st.columns([3.5, 1.2])
+with col_m_info:
+    total_may = int(st.session_state.may_data['So_Luong'].sum())
+    total_def = int(st.session_state.may_data['So_Luong_Mac_Dinh'].sum())
+    st.caption(f"⚙️ Điều chỉnh số lượng máy móc hoạt động thực tế trong ngày (Tổng cộng: **{total_may}** máy / mặc định {total_def} máy). "
+               f"Thuật toán sẽ tự động phân bổ và xếp lịch dựa trên số lượng máy nhập vào (nhập **0** nếu máy đang hỏng/bảo trì).")
+with col_m_reset:
+    if st.button("🔄 Khôi phục mặc định", use_container_width=True, key="btn_reset_may"):
+        st.session_state.may_data = get_default_may()
+        st.session_state.may_ver = st.session_state.get('may_ver', 0) + 1
+        st.session_state.may_ed_ver = st.session_state.get('may_ed_ver', 0) + 1
+        save_may_data_db(st.session_state.may_data, date_str)
+        st.rerun()
+
+with st.container(border=True):
+    may_df_cur = st.session_state.may_data
+    m_cols = st.columns(4)
+    new_sl_values = []
+    for idx_m, r_m in may_df_cur.iterrows():
+        with m_cols[idx_m % 4]:
+            cur_sl = int(r_m['So_Luong'])
+            def_sl = int(r_m['So_Luong_Mac_Dinh'])
+            diff_tag = f" (MĐ: {def_sl})" if cur_sl != def_sl else f" (MĐ: {def_sl})"
+            val_m = st.number_input(
+                f"🔌 {r_m['Ten_May']} — {r_m['Thu_Thuat']}{diff_tag}",
+                min_value=0, max_value=100, value=cur_sl, step=1,
+                help=f"Thủ thuật: {r_m['Thu_Thuat']} · Phụ trách: {r_m['Phu_Trach']} · {r_m['Thoi_Gian']} · Mặc định: {def_sl} máy",
+                key=f"may_num_{idx_m}_{st.session_state.get('may_ver', 0)}"
+            )
+            new_sl_values.append(int(val_m))
+
+    if new_sl_values != may_df_cur['So_Luong'].astype(int).tolist():
+        st.session_state.may_data['So_Luong'] = new_sl_values
+        st.session_state.may_ed_ver = st.session_state.get('may_ed_ver', 0) + 1
+        save_may_data_db(st.session_state.may_data, date_str)
+        st.rerun()
+
+diff_msgs, zero_msgs = [], []
+for _, r_m in st.session_state.may_data.iterrows():
+    sl_now, sl_def = int(r_m['So_Luong']), int(r_m['So_Luong_Mac_Dinh'])
+    if sl_now == 0:
+        zero_msgs.append(f"**{r_m['Ten_May']}** ({r_m['Thu_Thuat']})")
+    elif sl_now != sl_def:
+        diff_msgs.append(f"**{r_m['Ten_May']}**: {sl_now} máy *(mặc định {sl_def})*")
+
+if diff_msgs:
+    st.info("📌 **Đã điều chỉnh số lượng máy thực tế:** " + " · ".join(diff_msgs))
+if zero_msgs:
+    st.warning("⚠️ **Máy đang ngưng hoạt động (SL = 0):** " + ", ".join(zero_msgs) + " — Các thủ thuật dùng máy này sẽ không thể xếp lịch.")
+
+with st.expander("📋 Bảng chi tiết thông số & Ghi chú tình trạng máy móc"):
+    may_display = st.session_state.may_data.copy()
+    may_display.insert(0, 'STT', range(1, len(may_display) + 1))
+    edited_may = st.data_editor(
+        may_display,
+        key=f"may_editor_widget_{st.session_state.get('may_ed_ver', 0)}",
+        column_config={
+            "STT": st.column_config.NumberColumn("STT", disabled=True),
+            "Ten_May": st.column_config.TextColumn("Tên máy móc", disabled=True),
+            "Thu_Thuat": st.column_config.TextColumn("Thủ thuật áp dụng", disabled=True),
+            "Phu_Trach": st.column_config.TextColumn("Phụ trách", disabled=True),
+            "Thoi_Gian": st.column_config.TextColumn("Thời gian thực hiện", disabled=True),
+            "So_Luong_Mac_Dinh": st.column_config.NumberColumn("SL mặc định", disabled=True),
+            "So_Luong": st.column_config.NumberColumn("SL thực tế (Điều chỉnh)", min_value=0, max_value=100, step=1, required=True),
+            "Ghi_Chu": st.column_config.TextColumn("Ghi chú (Vd: Bảo trì 1 máy)")
+        },
+        hide_index=True, use_container_width=True
+    )
+    edited_may_clean = normalize_may(edited_may.drop(columns=['STT']))
+    if not edited_may_clean.equals(st.session_state.may_data):
+        st.session_state.may_data = edited_may_clean
+        st.session_state.may_ver = st.session_state.get('may_ver', 0) + 1
+        st.session_state.may_ed_ver = st.session_state.get('may_ed_ver', 0) + 1
+        save_may_data_db(st.session_state.may_data, date_str)
+        st.rerun()
 
 # ==========================================
 # KHU VỰC 2: QUẢN LÝ BỆNH NHÂN NỘI TRÚ
@@ -912,7 +1070,10 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
     staff_load = {}        # Tổng phút thao tác đã phân cho mỗi nhân viên (cân bằng tải KTV)
     staff_task_count = {}  # Số thủ thuật đã phân cho mỗi nhân viên
     
-    machine_capacities = {'Máy điện xung': 4, 'Máy từ trường': 1, 'Máy xoa bóp': 2, 'Máy kéo dãn': 1, 'Máy kéo': 1, 'Máy siêu âm': 2, 'Máy Laser': 1, 'Máy xung kích': 1, 'Máy hồng ngoại': 3, 'Máy Laser NM': 2, 'Máy Parafin': 2, 'Máy sóng ngắn': 1, 'Không': 100, 'Không dùng máy': 100}
+    cur_may_caps = {str(r_m['Ten_May']).strip(): max(0, int(r_m['So_Luong'])) for _, r_m in st.session_state.may_data.iterrows()}
+    prev_may_caps = st.session_state.get('sched_machine_caps')
+    machine_caps_changed = (prev_may_caps is not None and cur_may_caps != prev_may_caps)
+    machine_capacities = {**DEFAULT_MACHINE_CAPS, **cur_may_caps, 'Không': 100, 'Không dùng máy': 100}
     machine_busy = {}
     for _, row in df_thongso.iterrows():
         may = str(row['Yeu_Cau_May_Moc']).strip()
@@ -938,6 +1099,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             if c_p: t = c_p; continue
             m_idx = None
             if may_moc is not None:
+                if not machine_busy.get(may_moc): return None
                 min_m_c = limit_end_of_day
                 for idx, m_intervals in machine_busy[may_moc].items():
                     c_e = get_conflict_end(m_intervals, t, end_total)
@@ -988,6 +1150,7 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
     # BƯỚC 1: KHÔI PHỤC VÀ GIỮ NGUYÊN GIỜ LÀM CỦA BN CŨ ĐÃ XẾP TRƯỚC ĐÓ
     # 1A. Xác định các mục được giữ nguyên giờ (vẫn nằm trong khung giờ làm việc mới của NV)
     keep_pairs = {}  # (ma_bn, b_task) -> có thuộc giờ tăng ca hay không
+    temp_m_busy = {m: {i: [] for i in slots} for m, slots in machine_busy.items()}
     if df_baseline is not None and not df_baseline.empty:
         for _, row in df_baseline.iterrows():
             if row.get('Loai_Thoi_Gian', 'Thực hiện') != "Thực hiện": continue
@@ -1010,6 +1173,18 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
                 # Thủ thuật ưu tiên phải nằm trong giờ hành chính
                 allowed = allowed_hc if b_task in uu_tien_dict.get(ma_bn, set()) else allowed_ot
             if not inside(allowed.get(nv_clean, []), t_start, t_end): continue  # Ngoài khung giờ làm việc mới -> xếp lại
+            if b_task != "Khám bệnh":
+                if machine_caps_changed: continue  # Số lượng máy thay đổi -> xếp lại thủ thuật theo số máy mới
+                tt_info = tt_dict.get(ma_thu_thuat_dict.get(b_task))
+                may_chk = str(tt_info['Yeu_Cau_May_Moc']).strip() if tt_info else 'Không'
+                if may_chk not in temp_m_busy: may_chk = 'Không'
+                m_ok = False
+                for _, m_ivs in temp_m_busy[may_chk].items():
+                    if not get_conflict_end(m_ivs, t_start, t_end):
+                        m_ivs.append((t_start, t_end))
+                        m_ok = True
+                        break
+                if not m_ok: continue  # Vượt quá số lượng máy hiện tại -> xếp lại
             keep_pairs[(ma_bn, b_task)] = is_ot(nv_clean, t_start, t_end)
 
     # 1B. Khôi phục các mục được giữ
@@ -1180,19 +1355,22 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
         end_total = best_start + timedelta(minutes=thao_tac + cho)
         tc_flag = "⏰ Tăng ca" if is_ot(best_staff, best_start, end_total) else ""
         ut_flag = "⭐ Ưu tiên" if job.get('Is_Priority') else ""
+        same_old_time = (job['Thay_Doi'] == "Đổi giờ" and job.get('Gio_Cu') and best_start.strftime("%H:%M") == job['Gio_Cu'])
+        td_val = "" if same_old_time else job['Thay_Doi']
+        gc_val = "" if same_old_time else job['Gio_Cu']
         
         schedule_records.append(dict(
             Task=job['Ten_Thu_Thuat'], Base_Task=job['Ten_Thu_Thuat'], Loai_Thoi_Gian="Thực hiện",
             Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=best_staff,
             Ten_NV_Full=ten_nv_dict.get(best_staff, best_staff), Start=best_start, Finish=end_active,
-            Thay_Doi=job['Thay_Doi'], Gio_Cu=job['Gio_Cu'], Tang_Ca=tc_flag, Uu_Tien=ut_flag
+            Thay_Doi=td_val, Gio_Cu=gc_val, Tang_Ca=tc_flag, Uu_Tien=ut_flag
         ))
         if cho > 0:
             schedule_records.append(dict(
                 Task=f"{job['Ten_Thu_Thuat']} - Lưu", Base_Task=job['Ten_Thu_Thuat'], Loai_Thoi_Gian="Theo dõi",
                 Ma_BN=ma_bn, Ten_BN=ten_bn_dict[ma_bn], Nhan_Vien=f"{best_staff} (Theo dõi)",
                 Ten_NV_Full=f"{ten_nv_dict.get(best_staff, best_staff)} (Theo dõi)", Start=end_active, Finish=end_total,
-                Thay_Doi=job['Thay_Doi'], Gio_Cu=job['Gio_Cu'], Tang_Ca=tc_flag, Uu_Tien=ut_flag
+                Thay_Doi=td_val, Gio_Cu=gc_val, Tang_Ca=tc_flag, Uu_Tien=ut_flag
             ))
             
         patient_busy[ma_bn].append((best_start, end_total + timedelta(minutes=2)))
@@ -1260,7 +1438,12 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             nv_desc = f"Bác sĩ {ten_nv_dict.get(req_s, req_s)} (giờ hành chính: {fmt_ivs(allowed_hc.get(req_s, []))})"
         else:
             nv_desc = "đội ngũ KTV trong khung giờ hành chính"
-        unscheduled_logs.append(f"❌ **{ten_bn_dict[job['Ma_BN']]}**: Không kịp xếp thủ thuật ưu tiên ⭐ '{job['Ten_Thu_Thuat']}' trong giờ hành chính ({nv_desc}). Yêu cầu kéo dài thời gian làm trong giờ hành chính hoặc điều chỉnh thêm nhân viên.")
+        may_req = str(tt_info['Yeu_Cau_May_Moc']).strip()
+        if may_req not in ('Không', 'Không dùng máy') and machine_capacities.get(may_req, 1) <= 0:
+            unscheduled_logs.append(f"❌ **{ten_bn_dict[job['Ma_BN']]}**: Không thể xếp thủ thuật ưu tiên ⭐ '{job['Ten_Thu_Thuat']}' do **{may_req}** có số lượng = 0 (đang ngưng hoạt động). Vui lòng điều chỉnh số lượng máy.")
+        else:
+            may_note = f" hoặc tăng số lượng {may_req} (hiện có {machine_capacities.get(may_req, 1)} máy)" if may_req not in ('Không', 'Không dùng máy') else ""
+            unscheduled_logs.append(f"❌ **{ten_bn_dict[job['Ma_BN']]}**: Không kịp xếp thủ thuật ưu tiên ⭐ '{job['Ten_Thu_Thuat']}' trong giờ hành chính ({nv_desc}). Yêu cầu kéo dài thời gian làm trong giờ hành chính, điều chỉnh thêm nhân viên{may_note}.")
 
     # 4B. Xếp thủ thuật thường trong khung Giờ bắt đầu -> Giờ tan ca của nhân viên
     unsched_norm = sweep_jobs(norm_jobs, allowed_reg)
@@ -1276,11 +1459,17 @@ if st.button("🚀 TIẾN HÀNH XẾP LỊCH", type="primary", use_container_wid
             nv_desc = f"Bác sĩ {ten_nv_dict.get(req_s, req_s)} (khung giờ: {fmt_ivs(allowed_ot.get(req_s, []))})"
         else:
             nv_desc = "đội ngũ KTV (đã hết khung giờ làm việc / giờ tăng ca)"
-        unscheduled_logs.append(f"❌ **{ten_bn_dict[job['Ma_BN']]}**: Không kịp xếp '{job['Ten_Thu_Thuat']}' do vượt ngoài khung giờ làm việc của {nv_desc}. Yêu cầu kéo dài thời gian làm (chỉnh Giờ tan ca / bật Tăng ca) hoặc điều chỉnh thêm nhân viên.")
+        may_req = str(tt_info['Yeu_Cau_May_Moc']).strip()
+        if may_req not in ('Không', 'Không dùng máy') and machine_capacities.get(may_req, 1) <= 0:
+            unscheduled_logs.append(f"❌ **{ten_bn_dict[job['Ma_BN']]}**: Không thể xếp '{job['Ten_Thu_Thuat']}' do **{may_req}** có số lượng = 0 (đang ngưng hoạt động). Vui lòng điều chỉnh số lượng máy.")
+        else:
+            may_note = f" hoặc tăng số lượng {may_req} (hiện có {machine_capacities.get(may_req, 1)} máy)" if may_req not in ('Không', 'Không dùng máy') else ""
+            unscheduled_logs.append(f"❌ **{ten_bn_dict[job['Ma_BN']]}**: Không kịp xếp '{job['Ten_Thu_Thuat']}' do vượt ngoài khung giờ làm việc của {nv_desc}. Yêu cầu kéo dài thời gian làm (chỉnh Giờ tan ca / bật Tăng ca), điều chỉnh thêm nhân viên{may_note}.")
 
     st.session_state.unscheduled_logs = unscheduled_logs
     df_sched = pd.DataFrame(schedule_records)
     st.session_state.df_schedule = df_sched
+    st.session_state.sched_machine_caps = cur_may_caps
     save_sched_data_db(df_sched, date_str)
     st.rerun()
 
